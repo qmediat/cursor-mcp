@@ -1,0 +1,59 @@
+{
+  "name": "@qmediat.io/cursor-mcp",
+  "version": "1.0.0",
+  "mcpName": "io.github.qmediat/cursor-mcp",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "SECURITY.md"
+  ],
+  "description": "MCP server for Cursor CLI — access Composer 2, Claude, GPT, Gemini, and Grok models through Model Context Protocol",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "cursor-mcp": "dist/index.js"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepack": "npm run build",
+    "start": "node dist/index.js"
+  },
+  "keywords": [
+    "mcp",
+    "cursor",
+    "cursor-agent",
+    "composer-2",
+    "ai",
+    "model-context-protocol",
+    "claude-code",
+    "code-generation",
+    "code-review",
+    "multi-model"
+  ],
+  "homepage": "https://github.com/qmediat/cursor-mcp",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/qmediat/cursor-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/qmediat/cursor-mcp/issues"
+  },
+  "author": "Quantum Media Technologies <dev@qmediat.io> (https://www.qmediat.io)",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.3",
+    "typescript": "6.0.2"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.qmediat/cursor-mcp",
+  "description": "Cursor CLI — access Composer 2, Claude, GPT, Gemini, and Grok models through MCP",
+  "repository": {
+    "url": "https://github.com/qmediat/cursor-mcp",
+    "source": "github"
+  },
+  "version": "1.0.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@qmediat.io/cursor-mcp",
+      "version": "1.0.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "description": "Maximum concurrent cursor-agent processes (default: 3)",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "CURSOR_MAX_CONCURRENCY"
+        },
+        {
+          "description": "Enable auto-approve mode for cursor-agent (--force). DANGEROUS: auto-approves all file writes and terminal commands. Only for trusted environments.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "CURSOR_ALLOW_YOLO"
+        }
+      ]
+    }
+  ]
+}
