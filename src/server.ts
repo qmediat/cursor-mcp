@@ -43,8 +43,8 @@ export function createServer(): McpServer {
 
   server.registerTool("cursor_sessions", {
     description:
-      "List all Cursor agent sessions. Shows session IDs and history. " +
-      "Use session IDs with cursor_reply to continue a conversation.",
+      "List Cursor agent sessions created during this MCP server instance. " +
+      "Shows session IDs, models, and prompts. Use session IDs with cursor_reply to continue a conversation.",
     inputSchema: cursorSessionsInputSchema,
   }, async () => {
     try { return await handleCursorSessions(); } catch (error) { return errorResponse(error); }

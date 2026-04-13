@@ -46,7 +46,7 @@ Controlled via `.gitignore`:
 | 1 | `cursor_agent` | `cursor-agent -p --output-format json --trust [--model M] [--mode M] [--workspace W] [-c] PROMPT` | Main agent |
 | 2 | `cursor_reply` | `cursor-agent -p --output-format json --trust --resume SESSION_ID PROMPT` | Continue session |
 | 3 | `cursor_models` | `cursor-agent models` (fallback: static list) | List models |
-| 4 | `cursor_sessions` | `cursor-agent ls` | List sessions |
+| 4 | `cursor_sessions` | In-memory session store (replaced broken `cursor-agent ls` Ink TUI) | List sessions |
 | 5 | `cursor_health` | `cursor-agent --version` + `cursor-agent status` | Health check |
 
 ## Cursor Plan Comparison

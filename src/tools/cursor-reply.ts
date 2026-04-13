@@ -3,6 +3,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { execute } from "../executor.js";
 import { CursorModel, DEFAULT_TIMEOUT_MS } from "../types.js";
 import { formatDuration } from "../utils.js";
+import { sessionStore } from "../session-store.js";
 
 export const cursorReplyInputSchema = z.object({
   prompt: z.string().min(1).max(100_000).describe(
@@ -47,8 +48,15 @@ export async function handleCursorReply(
     const p = result.parsed;
     lines.push(p.result ?? "(no output)");
 
+    const sessionId = p.session_id ?? args.session_id;
+    if (sessionId) {
+      sessionStore.record(sessionId, args.prompt, {
+        model: args.model,
+      });
+    }
+
     const meta: string[] = [];
-    if (p.session_id) meta.push(`Session: ${p.session_id}`);
+    if (sessionId) meta.push(`Session: ${sessionId}`);
     if (p.duration_ms) meta.push(`Duration: ${formatDuration(p.duration_ms)}`);
 
     if (meta.length > 0) {
