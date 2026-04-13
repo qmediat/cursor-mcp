@@ -3,6 +3,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { execute } from "../executor.js";
 import { CursorModel, CursorMode, DEFAULT_TIMEOUT_MS } from "../types.js";
 import { formatDuration } from "../utils.js";
+import { sessionStore } from "../session-store.js";
 
 export const cursorAgentInputSchema = z.object({
   prompt: z.string().min(1).max(100_000).describe(
@@ -66,6 +67,13 @@ export async function handleCursorAgent(
   if (result.parsed) {
     const p = result.parsed;
     lines.push(p.result ?? "(no output)");
+
+    if (p.session_id) {
+      sessionStore.record(p.session_id, args.prompt, {
+        model: args.model ?? "auto",
+        mode: args.mode ?? "agent",
+      });
+    }
 
     const meta: string[] = [];
     if (p.session_id) meta.push(`Session: ${p.session_id}`);

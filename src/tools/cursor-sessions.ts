@@ -1,22 +1,40 @@
 import { z } from "zod/v4";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { execute } from "../executor.js";
+import { sessionStore } from "../session-store.js";
 
 export const cursorSessionsInputSchema = z.object({});
 
-export async function handleCursorSessions(): Promise<CallToolResult> {
-  const result = await execute({
-    args: ["ls"],
-    timeoutMs: 15_000,
-    parseJson: false,
-  });
+function formatAge(date: Date): string {
+  const seconds = Math.round((Date.now() - date.getTime()) / 1000);
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  return `${hours}h ago`;
+}
 
-  const output = result.stdout || "(no sessions found)";
+export async function handleCursorSessions(): Promise<CallToolResult> {
+  const sessions = sessionStore.list();
+
+  if (sessions.length === 0) {
+    return {
+      content: [{
+        type: "text" as const,
+        text: "No sessions yet. Use cursor_agent to start a new session.",
+      }],
+    };
+  }
+
+  const lines = sessions.map((s) => {
+    const model = s.model ?? "auto";
+    const msgs = s.messageCount === 1 ? "1 msg" : `${s.messageCount} msgs`;
+    return `- **${s.id}**\n  ${model} | ${msgs} | ${formatAge(s.lastUsedAt)}\n  "${s.firstPrompt}"`;
+  });
 
   return {
     content: [{
       type: "text" as const,
-      text: `Cursor agent sessions:\n\n${output}\n\nUse cursor-reply with a session_id to continue a conversation.`,
+      text: `Sessions (this server instance):\n\n${lines.join("\n\n")}\n\nUse cursor_reply with a session_id to continue a conversation.`,
     }],
   };
 }
