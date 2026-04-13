@@ -5,12 +5,13 @@ import { sessionStore } from "../session-store.js";
 export const cursorSessionsInputSchema = z.object({});
 
 function formatAge(date: Date): string {
-  const seconds = Math.round((Date.now() - date.getTime()) / 1000);
+  const seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
   if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.round(seconds / 60);
+  const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
-  return `${hours}h ago`;
+  const hours = Math.floor(seconds / 3600);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
 }
 
 export async function handleCursorSessions(): Promise<CallToolResult> {

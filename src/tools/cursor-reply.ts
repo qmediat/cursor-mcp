@@ -48,14 +48,15 @@ export async function handleCursorReply(
     const p = result.parsed;
     lines.push(p.result ?? "(no output)");
 
-    if (p.session_id) {
-      sessionStore.record(p.session_id, args.prompt, {
+    const sessionId = p.session_id ?? args.session_id;
+    if (sessionId) {
+      sessionStore.record(sessionId, args.prompt, {
         model: args.model,
       });
     }
 
     const meta: string[] = [];
-    if (p.session_id) meta.push(`Session: ${p.session_id}`);
+    if (sessionId) meta.push(`Session: ${sessionId}`);
     if (p.duration_ms) meta.push(`Duration: ${formatDuration(p.duration_ms)}`);
 
     if (meta.length > 0) {

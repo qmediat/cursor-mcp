@@ -16,21 +16,27 @@
 - [x] CLAUDE.md updated (21 servers)
 - [x] Memory saved: `project_cursor_mcp.md`
 
+### DONE — Session 2 (2026-04-13)
+1. [x] Restart Claude Code (Cmd+Q) — new MCP server loaded
+2. [x] Test all 5 tools:
+   - `cursor_health` — PASS (v2026.04.08, auth OK)
+   - `cursor_models` — PASS (80+ models)
+   - `cursor_agent` auto — PASS (4, correct)
+   - `cursor_agent` composer-2 — PASS (21, correct)
+   - `cursor_reply` — PASS (31, remembers context)
+   - `cursor_sessions` — FAIL (Ink TUI crash, `Raw mode not supported`)
+3. [x] Fix: replaced `cursor-agent ls` with in-memory SessionStore
+4. [x] 5-way code review (GPT-5.3-Codex + Gemini-3.1-Pro + Grok-4.20 + Copilot + self)
+5. [x] 6-step deep analysis on all 11 findings (5 TP fixed, 5 FP, 1 FP zod)
+6. [x] Fixes: LRU eviction (cap 200), emoji protection, whitespace normalization, reply fallback, formatAge
+
 ### TODO — Next Session
-1. **Restart Claude Code** (Cmd+Q) — required to load new MCP server
-2. **Test all 5 tools** (after restart):
-   - `cursor_health` — verify installation + auth status
-   - `cursor_models` — list available models (check if Composer 2 appears)
-   - `cursor_agent` with `model: "auto"` — basic test: "What is 2+2?"
-   - `cursor_agent` with `model: "composer-2"` — Composer 2 specific test
-   - `cursor_reply` with session_id from step above — session continuation
-   - `cursor_sessions` — list sessions
+1. **Restart Claude Code** (Cmd+Q) — required to load rebuilt MCP server
+2. **Retest cursor_sessions** — verify fix (empty list → create session → list → reply → list)
 3. **Test parallel execution** — 3 Agent subprocesses, each with different model
-4. **Code review** — run triple review (GPT + Gemini + Grok) on cursor-mcp/src/
-5. **Fix any issues** found in testing or review
-6. **Publish to npm**: `cd ~/MCP-Servers/cursor-mcp && npm publish`
-7. **Test npx install**: verify `npx @qmediat.io/cursor-mcp` works
-8. **Update qmediat.io/open-source page** — add cursor-mcp card
+4. **Publish to npm**: `cd ~/MCP-Servers/cursor-mcp && npm publish`
+5. **Test npx install**: verify `npx @qmediat.io/cursor-mcp` works
+6. **Update qmediat.io/open-source page** — add cursor-mcp card
 
 ### Architecture Reference
 - Pattern: ideogram-mcp (TypeScript, MCP SDK + Zod, stdio)

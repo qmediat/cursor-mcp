@@ -99,7 +99,7 @@ npx @qmediat.io/cursor-mcp
 | `cursor_agent` | Execute a prompt using Cursor's AI agent | `prompt`, `model`, `mode`, `workspace`, `cloud`, `timeout_seconds` |
 | `cursor_reply` | Continue an existing agent session | `prompt`, `session_id`, `model`, `timeout_seconds` |
 | `cursor_models` | List all available AI models | — |
-| `cursor_sessions` | List all agent sessions | — |
+| `cursor_sessions` | List agent sessions (this server instance) | — |
 | `cursor_health` | Check installation, auth, and config | — |
 
 ### Models

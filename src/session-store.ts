@@ -9,10 +9,16 @@ export interface SessionEntry {
 }
 
 const MAX_PROMPT_LENGTH = 80;
+const MAX_SESSIONS = 200;
+
+function normalize(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
 
 function truncate(text: string, max: number): string {
-  if (text.length <= max) return text;
-  return text.slice(0, max - 1) + "\u2026";
+  const codePoints = [...text];
+  if (codePoints.length <= max) return text;
+  return codePoints.slice(0, max - 1).join("") + "\u2026";
 }
 
 class SessionStore {
@@ -34,17 +40,31 @@ class SessionStore {
       id,
       model: meta.model,
       mode: meta.mode,
-      firstPrompt: truncate(prompt, MAX_PROMPT_LENGTH),
+      firstPrompt: truncate(normalize(prompt), MAX_PROMPT_LENGTH),
       createdAt: new Date(),
       lastUsedAt: new Date(),
       messageCount: 1,
     });
+    this.evict();
   }
 
   list(): SessionEntry[] {
     return Array.from(this.sessions.values()).sort(
       (a, b) => b.lastUsedAt.getTime() - a.lastUsedAt.getTime(),
     );
+  }
+
+  private evict(): void {
+    if (this.sessions.size <= MAX_SESSIONS) return;
+    let oldest: string | undefined;
+    let oldestTime = Infinity;
+    for (const [id, entry] of this.sessions) {
+      if (entry.lastUsedAt.getTime() < oldestTime) {
+        oldestTime = entry.lastUsedAt.getTime();
+        oldest = id;
+      }
+    }
+    if (oldest) this.sessions.delete(oldest);
   }
 }
 
