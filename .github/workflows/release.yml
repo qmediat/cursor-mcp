@@ -7,7 +7,8 @@ name: Release
 # otherwise run the workflow as it was at that tag).
 # Publishing uses npm Trusted Publishing (OIDC): the package's trusted publisher on npmjs.com names this repository
 # and this workflow file (no environment); the job holds `id-token: write` and no token secret exists. npm attaches
-# the provenance attestation itself.
+# the provenance attestation itself; `--provenance` stays explicit so a publish that cannot attest fails instead of
+# shipping silently without one.
 # Actions are pinned to full commit SHAs; Dependabot keeps the pins current.
 
 on:
@@ -33,9 +34,10 @@ jobs:
         with:
           ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
           persist-credentials: false
+      # The same Node the publish job builds the release on; the engines floor (22) is ci.yml's matrix.
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       - name: Resolve the release tag
         run: echo "TAG=${INPUT_TAG:-$GITHUB_REF_NAME}" >> "$GITHUB_ENV"
@@ -84,6 +86,7 @@ jobs:
         with:
           ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
           persist-credentials: false
+      # No dependency cache in the release build (npm's Trusted Publishing guidance); verify keeps its cache.
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
