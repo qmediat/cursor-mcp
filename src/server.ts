@@ -6,11 +6,15 @@ import { cursorModelsInputSchema, handleCursorModels } from "./tools/cursor-mode
 import { cursorSessionsInputSchema, handleCursorSessions } from "./tools/cursor-sessions.js";
 import { cursorHealthInputSchema, handleCursorHealth } from "./tools/cursor-health.js";
 import { CursorCliError, CursorTimeoutError, CursorNotFoundError, CursorAbortError } from "./errors.js";
+import { createRequire } from "node:module";
+
+// dist/server.js → ../package.json is the package root both in the repository and when installed from npm.
+const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
 
 export function createServer(): McpServer {
   const server = new McpServer({
     name: "cursor-mcp",
-    version: "1.0.0",
+    version,
   });
 
   server.registerTool("cursor_agent", {

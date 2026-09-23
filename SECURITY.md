@@ -39,7 +39,18 @@ The `--force` flag makes cursor-agent auto-approve **all** tool calls (file writ
 
 ## Reporting Vulnerabilities
 
-Report security issues to: **security@qmediat.io**
+Report security issues privately:
+
+- **Preferred:** GitHub's [Report a vulnerability](https://github.com/qmediat/cursor-mcp/security/advisories/new) form (Security tab → Advisories) — it reaches the maintainers privately and tracks the fix and the disclosure.
+- **Email:** security@qmediat.io
+
+Do not open public GitHub issues for security reports. We acknowledge receipt within 48 hours and aim to publish a fix within 7 days for high-severity issues.
+
+## Supply Chain
+
+- Two runtime dependencies (`@modelcontextprotocol/sdk`, `zod`), pinned exactly.
+- Dependabot security updates are enabled; CI and the release workflow refuse a build with a known high-severity advisory in the shipped dependency tree (`npm audit --omit=dev --audit-level=high`).
+- Releases are published to npm from GitHub Actions with provenance attestations (`npm publish --provenance`); the npm page of every version links the workflow run that built it.
 
 Please include:
 - Description of the vulnerability

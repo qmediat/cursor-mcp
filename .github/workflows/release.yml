@@ -1,0 +1,95 @@
+name: Release
+
+# A pushed tag v<version> (equal to package.json) → verify (read-only job: typecheck, tests, audit of the shipped tree, tag and manifest checks)
+# → publish (the only job with the publishing permissions; installs with --ignore-scripts, skips a version already on
+# npm so a re-run is safe) → GitHub Release from the CHANGELOG section.
+# Publishing needs the npm publishing credential NPM_TOKEN (an npm "Automation" token with publish rights on
+# @qmediat.io) visible to this repository, or npm Trusted Publishing configured for this workflow.
+# Actions are pinned to full commit SHAs; Dependabot keeps the pins current.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions: {}
+
+jobs:
+  verify:
+    name: Verify the tagged tree
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Tag must be v<package.json version>
+        run: |
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_REF_NAME" != "v$pkg" ]; then
+            echo "::error ::tag $GITHUB_REF_NAME must be v$pkg (package.json version with the v prefix)"
+            exit 1
+          fi
+
+      - name: server.json versions must equal package.json
+        run: |
+          node -e '
+            const s = require("./server.json"); const v = require("./package.json").version;
+            const seen = [s.version, ...(s.packages ?? []).map((p) => p.version)];
+            if (seen.some((x) => x !== v)) { console.error(`server.json versions ${JSON.stringify(seen)} != package.json ${v}`); process.exit(1); }
+            console.log(`server.json versions match ${v}`);
+          '
+
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm audit --omit=dev --audit-level=high
+
+  publish:
+    name: Publish to npm + GitHub Release
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+
+      # Resumable: a re-run after a failed later step skips a version that is already on the registry.
+      - name: Publish to npm (provenance) unless this version is already published
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          name="$(node -p "require('./package.json').name")"
+          v="$(node -p "require('./package.json').version")"
+          if [ "$(npm view "$name@$v" version 2>/dev/null)" = "$v" ]; then
+            echo "$name@$v is already on npm; skipping publish"
+          else
+            npm publish --provenance --access public --ignore-scripts
+          fi
+
+      - name: GitHub Release from the CHANGELOG section
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          awk -v v="$v" '$0 ~ "^## \\[" v "\\]" {p=1; next} /^## \[/ {p=0} p' CHANGELOG.md > /tmp/notes.md
+          if ! grep -q '[^[:space:]]' /tmp/notes.md; then
+            echo "::error ::CHANGELOG.md has no section for [$v]"
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file /tmp/notes.md
