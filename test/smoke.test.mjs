@@ -17,6 +17,8 @@ const EXPECTED_TOOLS = ["cursor_agent", "cursor_reply", "cursor_models", "cursor
 /** Spawns the built server; every request either resolves with its response or rejects (timeout, child exit, error). */
 function startServer() {
   const child = spawn(process.execPath, [SERVER], { stdio: ["pipe", "pipe", "pipe"] });
+  // Registered before anything can happen, so an early exit is never missed by stop().
+  const closed = once(child, "close");
   const pending = new Map();
   let stderr = "";
   child.stderr.on("data", (chunk) => {
@@ -33,7 +35,13 @@ function startServer() {
   child.on("exit", (code, signal) => failAll(`server exited early (code ${code}, signal ${signal})`));
   createInterface({ input: child.stdout }).on("line", (line) => {
     if (line.trim() === "") return;
-    const message = JSON.parse(line);
+    let message;
+    try {
+      message = JSON.parse(line);
+    } catch {
+      failAll(`non-JSON line on stdout: ${line.slice(0, 200)}`);
+      return;
+    }
     const entry = pending.get(message.id);
     if (entry === undefined) return;
     clearTimeout(entry.timer);
@@ -54,7 +62,7 @@ function startServer() {
   const notify = (method) => child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method })}\n`);
   const stop = async () => {
     child.kill();
-    await once(child, "close");
+    await closed;
   };
   return { request, notify, stop };
 }

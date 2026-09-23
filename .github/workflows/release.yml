@@ -46,14 +46,21 @@ jobs:
           '
 
       - run: npm run typecheck
-      - run: npm run build
       - run: npm test
       - run: npm audit --omit=dev --audit-level=high
 
-      - name: Publish to npm (provenance)
+      # Resumable: a re-run after a failed later step skips a version that is already on the registry.
+      - name: Publish to npm (provenance) unless this version is already published
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --provenance --access public
+        run: |
+          name="$(node -p "require('./package.json').name")"
+          v="$(node -p "require('./package.json').version")"
+          if [ "$(npm view "$name@$v" version 2>/dev/null)" = "$v" ]; then
+            echo "$name@$v is already on npm; skipping publish"
+          else
+            npm publish --provenance --access public
+          fi
 
       - name: GitHub Release from the CHANGELOG section
         env:
@@ -61,4 +68,8 @@ jobs:
         run: |
           v="${GITHUB_REF_NAME#v}"
           awk -v v="$v" '$0 ~ "^## \\[" v "\\]" {p=1; next} /^## \[/ {p=0} p' CHANGELOG.md > /tmp/notes.md
+          if ! grep -q '[^[:space:]]' /tmp/notes.md; then
+            echo "::error ::CHANGELOG.md has no section for [$v]"
+            exit 1
+          fi
           gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file /tmp/notes.md
