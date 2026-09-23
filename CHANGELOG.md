@@ -4,7 +4,7 @@
 
 ### Changed
 
-- The README opens with the Quantum Media Technologies wordmark and closes with a "Made by" line, both linking to www.qmediat.io/open-source; `package.json` `homepage` points there and `author` is the company line every qmediat package uses.
+- The README opens with the Quantum Media Technologies wordmark and closes with a "Made by" line, both linking to www.qmediat.io/open-source; `package.json` `homepage` points there (`author` already carried the company line).
 
 ## [1.0.2] - 2026-09-23
 
