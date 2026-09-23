@@ -1,5 +1,35 @@
 # Changelog
 
+## [1.0.2] - 2026-09-23
+
+### Security
+
+- Lockfile refresh closes all 39 open Dependabot advisories (9 high; all transitive dependencies of the MCP SDK):
+  `hono` 4.13.8, `fast-uri` 3.1.8, `qs` 6.16.0, `body-parser` 2.3.0, `ip-address` 10.7.2 → `npm audit` reports
+  0 vulnerabilities. `@modelcontextprotocol/sdk` is pinned to 1.30.0, the version this release was tested with;
+  `zod` stays at 4.3.6. The advisories sit under the SDK's caret ranges, so a project that already has this package
+  in its lockfile keeps its old tree until it runs `npm update` (or `npm audit fix`); a fresh install gets the
+  refreshed tree.
+- First CI (`.github/workflows/ci.yml`): typecheck, build, smoke test and `npm audit --omit=dev --audit-level=high`
+  on Node 22 and 24 with a read-only token.
+- First release workflow (`.github/workflows/release.yml`): a `v<version>` tag equal to `package.json` and
+  `server.json` → the same gates → `npm publish --provenance` → GitHub Release from this file's section.
+- Dependabot configuration (weekly grouped npm updates, GitHub Actions updates); Dependabot security updates and
+  GitHub private vulnerability reporting are enabled on the repository; `SECURITY.md` points to the private
+  reporting form first and documents the supply chain.
+
+### Fixed
+
+- The server advertised `version: 1.0.0` in `serverInfo` regardless of the package version; it now reads the
+  version from `package.json`, and the smoke test asserts the two agree.
+- `server.json` (MCP registry manifest) still said 1.0.0; both fields follow the package version.
+
+### Added
+
+- `npm test` (builds first): a stdio smoke test on Node's built-in runner — the built server completes the MCP
+  handshake, advertises the package version, lists its five tools, and never exposes the auto-approve flag as a tool
+  parameter. Every request has a 10 s deadline and is rejected if the server exits. No new dependency.
+
 ## [1.0.1] - 2026-04-13
 
 ### Fixed

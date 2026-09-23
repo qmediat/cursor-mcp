@@ -1,0 +1,64 @@
+name: Release
+
+# A pushed tag v<version> (equal to package.json) → typecheck, build, smoke test, audit of the shipped tree →
+# npm publish with provenance → GitHub Release with the CHANGELOG section of that version.
+# Publishing needs the npm publishing credential NPM_TOKEN (an npm "Automation" token with publish rights on
+# @qmediat.io) visible to this repository, or npm Trusted Publishing configured for this workflow.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    name: Publish to npm + GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      - run: npm ci
+
+      - name: Tag must be v<package.json version>
+        run: |
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_REF_NAME" != "v$pkg" ]; then
+            echo "::error ::tag $GITHUB_REF_NAME must be v$pkg (package.json version with the v prefix)"
+            exit 1
+          fi
+
+      - name: server.json versions must equal package.json
+        run: |
+          node -e '
+            const s = require("./server.json"); const v = require("./package.json").version;
+            const seen = [s.version, ...(s.packages ?? []).map((p) => p.version)];
+            if (seen.some((x) => x !== v)) { console.error(`server.json versions ${JSON.stringify(seen)} != package.json ${v}`); process.exit(1); }
+            console.log(`server.json versions match ${v}`);
+          '
+
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+      - run: npm audit --omit=dev --audit-level=high
+
+      - name: Publish to npm (provenance)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public
+
+      - name: GitHub Release from the CHANGELOG section
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          awk -v v="$v" '$0 ~ "^## \\[" v "\\]" {p=1; next} /^## \[/ {p=0} p' CHANGELOG.md > /tmp/notes.md
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file /tmp/notes.md

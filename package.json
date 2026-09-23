@@ -1,6 +1,6 @@
 {
   "name": "@qmediat.io/cursor-mcp",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "mcpName": "io.github.qmediat/cursor-mcp",
   "files": [
     "dist",
@@ -20,6 +20,9 @@
   },
   "scripts": {
     "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "pretest": "npm run build",
+    "test": "node --test",
     "prepack": "npm run build",
     "start": "node dist/index.js"
   },
@@ -46,7 +49,7 @@
   "author": "Quantum Media Technologies <dev@qmediat.io> (https://www.qmediat.io)",
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.29.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "zod": "4.3.6"
   },
   "devDependencies": {
