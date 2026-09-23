@@ -1,8 +1,10 @@
 name: Release
 
-# A pushed tag v<version> (equal to package.json) → verify (read-only job: typecheck, tests, audit of the shipped tree, tag and manifest checks)
-# → publish (the only job with the publishing permissions; installs with --ignore-scripts, skips a version already on
-# npm so a re-run is safe) → GitHub Release from the CHANGELOG section.
+# A pushed tag v<version> (equal to package.json) → verify (read-only job: tag, manifest and CHANGELOG checks, typecheck, tests, audit of the shipped
+# tree) → publish (the only job with the publishing permissions; installs with --ignore-scripts, skips a version
+# already on npm so a re-run is safe) → GitHub Release from the CHANGELOG section (created or updated).
+# `workflow_dispatch` with `tag` releases an existing tag with THIS workflow definition (a tag pushed earlier would
+# otherwise run the workflow as it was at that tag).
 # Publishing needs the npm publishing credential NPM_TOKEN (an npm "Automation" token with publish rights on
 # @qmediat.io) visible to this repository, or npm Trusted Publishing configured for this workflow.
 # Actions are pinned to full commit SHAs; Dependabot keeps the pins current.
@@ -10,6 +12,12 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release with the current workflow (v<version>)"
+        required: true
+        type: string
 
 permissions: {}
 
@@ -22,18 +30,22 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      - name: Resolve the release tag
+        run: echo "TAG=${INPUT_TAG:-$GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
 
       - name: Tag must be v<package.json version>
         run: |
           pkg="$(node -p "require('./package.json').version")"
-          if [ "$GITHUB_REF_NAME" != "v$pkg" ]; then
-            echo "::error ::tag $GITHUB_REF_NAME must be v$pkg (package.json version with the v prefix)"
+          if [ "$TAG" != "v$pkg" ]; then
+            echo "::error ::tag $TAG must be v$pkg (package.json version with the v prefix)"
             exit 1
           fi
 
@@ -45,7 +57,16 @@ jobs:
             if (seen.some((x) => x !== v)) { console.error(`server.json versions ${JSON.stringify(seen)} != package.json ${v}`); process.exit(1); }
             console.log(`server.json versions match ${v}`);
           '
+      - name: CHANGELOG.md must have a section for this version
+        run: |
+          v="${TAG#v}"
+          awk -v v="$v" 'index($0, "## [" v "]") == 1 {p=1; next} /^## \[/ {p=0} p' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then
+            echo "::error ::CHANGELOG.md has no section for [$v]"
+            exit 1
+          fi
 
+      - run: npm ci
       - run: npm run typecheck
       - run: npm test
       - run: npm audit --omit=dev --audit-level=high
@@ -60,12 +81,26 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
           cache: npm
+      - name: Resolve the release tag
+        run: echo "TAG=${INPUT_TAG:-$GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+      - name: CHANGELOG.md must have a section for this version
+        run: |
+          v="${TAG#v}"
+          awk -v v="$v" 'index($0, "## [" v "]") == 1 {p=1; next} /^## \[/ {p=0} p' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then
+            echo "::error ::CHANGELOG.md has no section for [$v]"
+            exit 1
+          fi
+
       - run: npm ci --ignore-scripts
       - run: npm run build
 
@@ -82,14 +117,12 @@ jobs:
             npm publish --provenance --access public --ignore-scripts
           fi
 
-      - name: GitHub Release from the CHANGELOG section
+      - name: GitHub Release from the CHANGELOG section (created or updated)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          v="${GITHUB_REF_NAME#v}"
-          awk -v v="$v" '$0 ~ "^## \\[" v "\\]" {p=1; next} /^## \[/ {p=0} p' CHANGELOG.md > /tmp/notes.md
-          if ! grep -q '[^[:space:]]' /tmp/notes.md; then
-            echo "::error ::CHANGELOG.md has no section for [$v]"
-            exit 1
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            gh release create "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
           fi
-          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file /tmp/notes.md
