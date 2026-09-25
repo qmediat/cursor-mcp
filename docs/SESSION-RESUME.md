@@ -34,7 +34,7 @@
 1. **Restart Claude Code** (Cmd+Q) — required to load rebuilt MCP server
 2. **Retest cursor_sessions** — verify fix (empty list → create session → list → reply → list)
 3. **Test parallel execution** — 3 Agent subprocesses, each with different model
-4. **Publish to npm**: `cd ~/MCP-Servers/cursor-mcp && npm publish`
+4. **Publish to npm**: push the tag `v<version>` (or `gh workflow run release.yml -f tag=v<version>`); the workflow stages it and a maintainer approves it on npmjs.com with 2FA
 5. **Test npx install**: verify `npx @qmediat.io/cursor-mcp` works
 6. **Update qmediat.io/open-source page** — add cursor-mcp card
 
@@ -59,8 +59,8 @@ node dist/index.js
 # Check cursor-agent auth
 cursor-agent status
 
-# Publish to npm (after testing)
-npm publish
+# Publish to npm (after testing): release.yml stages the tagged version; approve it on npmjs.com (2FA)
+gh workflow run release.yml -f tag=v<version>
 
 # Config location
 jq '.mcpServers["cursor-cli"]' ~/.claude.json
