@@ -4,6 +4,9 @@
 
 ### Changed
 
+- Releases are staged on npm instead of published directly: the release workflow runs `npm stage publish`
+  (Trusted Publishing, provenance), and a version becomes public only when a maintainer approves it on
+  npmjs.com with two-factor authentication; the workflow installs npm 11.15.0 or later for it.
 - The README opens with the Quantum Media Technologies wordmark and closes with a "Made by" line, both linking to www.qmediat.io/open-source; `package.json` `homepage` points there (`author` already carried the company line).
 
 ## [1.0.2] - 2026-09-23

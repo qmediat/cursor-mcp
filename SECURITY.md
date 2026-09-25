@@ -50,7 +50,7 @@ Do not open public GitHub issues for security reports. We acknowledge receipt wi
 
 - Two runtime dependencies (`@modelcontextprotocol/sdk`, `zod`), pinned exactly.
 - Dependabot security updates are enabled; CI and the release workflow refuse a build with a known high-severity advisory in the shipped dependency tree (`npm audit --omit=dev --audit-level=high`).
-- Releases are published to npm from GitHub Actions with provenance attestations (`npm publish --provenance`); the npm page of every version links the workflow run that built it.
+- Releases are staged on npm from GitHub Actions with provenance attestations (`npm stage publish --provenance`) and become public only after a maintainer approves them with two-factor authentication; the npm page of every version links the workflow run that built it.
 
 Please include:
 - Description of the vulnerability
