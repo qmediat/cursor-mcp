@@ -95,7 +95,7 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
       # Staged publishing needs npm 11.15.0+; the release installs ONE exact version (this file's pinning policy) and checks
-      # that the PATH runs it
+      # that the PATH runs it. Dependabot does not see this pin: raise it by hand within npm 11.
       - name: npm 11.20.0 (staged publishing, Trusted Publishing)
         env:
           NPM_PIN: 11.20.0
@@ -158,10 +158,13 @@ jobs:
             {
               echo "### $name@$v is staged — not public until a maintainer approves it"
               echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID · commit $GITHUB_SHA"
-              echo "Approve with 2FA: https://www.npmjs.com/package/$name → **Staged Packages** → **Approve**, or \`npm stage approve <stage-id>\`; the stage log:"
+              echo "Approve with 2FA: https://www.npmjs.com/package/$name → **Staged Packages** → **Approve**, or \`npm stage approve <stage-id>\`."
+              echo '<details><summary>stage log (the stage id is in it)</summary>'
+              echo
               echo '```'
-              tail -n 8 "$RUNNER_TEMP/stage.log"
+              cat "$RUNNER_TEMP/stage.log"
               echo '```'
+              echo '</details>'
               echo "Then re-run this workflow (or \`gh release edit $TAG --draft=false\`): the GitHub Release draft is published once the version is public."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
