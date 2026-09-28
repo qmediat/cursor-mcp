@@ -10,8 +10,7 @@ updates:
     open-pull-requests-limit: 5
     labels: [dependencies, automated]
     commit-message:
-      prefix: "chore(deps)"
-      prefix-development: "chore(dev-deps)"
+      prefix: "chore" # with include: scope → "chore(deps): …" / "chore(deps-dev): …" (a scoped prefix doubled it)
       include: scope
     groups:
       non-major: # one weekly PR for every minor and patch; majors stay individual PRs
