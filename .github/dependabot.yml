@@ -14,8 +14,13 @@ updates:
       prefix-development: "chore(dev-deps)"
       include: scope
     groups:
-      non-major:
+      non-major: # one weekly PR for every minor and patch; majors stay individual PRs
         update-types: [minor, patch]
+    ignore:
+      # @types/node follows the Node major we run on (engines.node >=22), not the newest one: a newer types
+      # package types APIs Node 22 does not have. Bump it with engines.node, never on its own.
+      - dependency-name: "@types/node"
+        update-types: [version-update:semver-major]
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
@@ -23,6 +28,9 @@ updates:
       day: monday
       time: "08:00"
       timezone: Europe/Warsaw
-    labels: [dependencies, automated]
+    labels: [dependencies, github-actions, automated]
     commit-message:
       prefix: "chore(ci)"
+    groups:
+      actions-non-major: # one weekly PR for minor and patch action updates; majors stay individual PRs
+        update-types: [minor, patch]
