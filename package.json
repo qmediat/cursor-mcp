@@ -49,11 +49,11 @@
   "author": "Quantum Media Technologies <dev@qmediat.io> (https://www.qmediat.io)",
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.30.0",
-    "zod": "4.3.6"
+    "@modelcontextprotocol/sdk": "1.30.1",
+    "zod": "4.6.5"
   },
   "devDependencies": {
-    "@types/node": "22.15.3",
+    "@types/node": "22.20.4",
     "typescript": "6.0.2"
   },
   "engines": {
