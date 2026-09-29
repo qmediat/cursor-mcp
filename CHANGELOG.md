@@ -2,12 +2,20 @@
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-09-29
+
 ### Changed
 
+- Runtime dependencies: `@modelcontextprotocol/sdk` 1.30.1 (was 1.30.0) and `zod` 4.6.5 (was 4.3.6).
 - Releases are staged on npm instead of published directly: the release workflow runs `npm stage publish`
   (Trusted Publishing, provenance), and a version becomes public only when a maintainer approves it on
   npmjs.com with two-factor authentication; the workflow pins npm 11.20.0 for it (staged publishing needs 11.15.0+).
 - The README opens with the Quantum Media Technologies wordmark and closes with a "Made by" line, both linking to www.qmediat.io/open-source; `package.json` `homepage` points there (`author` already carried the company line).
+- Development: the project builds with TypeScript 7 (the native compiler). The published JavaScript is byte-identical
+  to 1.0.2; the type declarations describe the same types (only the order of union members and properties and the
+  quote style differ) and the source maps are regenerated. The TypeScript 7 npm package ships only `tsc` — no
+  `tsserver` and no JavaScript API — so an editor set to use the workspace TypeScript version cannot load it from
+  `node_modules`; use the editor's bundled one.
 
 ## [1.0.2] - 2026-09-23
 
