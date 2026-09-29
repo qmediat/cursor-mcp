@@ -147,10 +147,9 @@ jobs:
         run: |
           name="$(node -p "require('./package.json').name")"
           v="$(node -p "require('./package.json').version")"
-          if out="$(npm view "$name@$v" version 2>"$RUNNER_TEMP/npm-view.err")"; then
-            public=0
-            if [ "$out" = "$v" ]; then public=1; fi
-          elif grep -q 'code E404' "$RUNNER_TEMP/npm-view.err"; then
+          if out="$(npm view "$name@$v" version 2>"$RUNNER_TEMP/npm-view.err")" && [ "$out" = "$v" ]; then
+            public=1
+          elif [ -z "${out:-}" ] && grep -q 'code E404' "$RUNNER_TEMP/npm-view.err"; then
             public=0
           else
             cat "$RUNNER_TEMP/npm-view.err"
