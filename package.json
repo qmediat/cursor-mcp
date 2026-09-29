@@ -41,7 +41,7 @@
   "homepage": "https://www.qmediat.io/open-source",
   "repository": {
     "type": "git",
-    "url": "https://github.com/qmediat/cursor-mcp.git"
+    "url": "git+https://github.com/qmediat/cursor-mcp.git"
   },
   "bugs": {
     "url": "https://github.com/qmediat/cursor-mcp/issues"
