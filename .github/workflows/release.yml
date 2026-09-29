@@ -3,7 +3,8 @@ name: Release
 # A pushed tag v<version> (equal to package.json) → verify (read-only job: tag, manifest and CHANGELOG checks, typecheck, tests, audit of the shipped
 # tree) → publish (the only job with the publishing permissions; installs with --ignore-scripts): a GitHub Release
 # from the CHANGELOG section (a draft until the version is public on npm), then `npm stage publish` — public on npm once a maintainer approves it with 2FA; a
-# re-run after the approval publishes the draft, a re-run while the version still waits fails at the stage step.
+# re-run after the approval publishes the draft; npm documents no second stage of a version that still waits, so
+# approve or reject that one before a re-run.
 # `workflow_dispatch` with `tag` releases an existing tag with THIS workflow definition (a tag pushed earlier would
 # otherwise run the workflow as it was at that tag).
 # Publishing uses npm Trusted Publishing (OIDC): the package's trusted publisher on npmjs.com names this repository
@@ -69,8 +70,8 @@ jobs:
         run: |
           v="${TAG#v}"
           awk -v v="$v" 'index($0, "## [" v "]") == 1 {p=1; next} /^## \[/ {p=0} p' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
-          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then
-            echo "::error ::CHANGELOG.md has no section for [$v]"
+          if ! grep -q '^[[:space:]]*- ' "$RUNNER_TEMP/notes.md"; then
+            echo "::error ::CHANGELOG.md has no section with entries for [$v]"
             exit 1
           fi
 
@@ -108,6 +109,10 @@ jobs:
         working-directory: ${{ runner.temp }}
         run: |
           tgz="$(npm pack "npm@$NPM_PIN" --silent)"
+          if [ ! -f "$tgz" ]; then
+            echo "::error ::npm pack npm@$NPM_PIN printed no tarball name ($tgz)"
+            exit 1
+          fi
           got="sha512-$(openssl dgst -sha512 -binary "$tgz" | openssl base64 -A)"
           if [ "$got" != "$NPM_INTEGRITY" ]; then
             echo "::error ::npm@$NPM_PIN tarball is $got, the pin is $NPM_INTEGRITY"
@@ -128,8 +133,8 @@ jobs:
         run: |
           v="${TAG#v}"
           awk -v v="$v" 'index($0, "## [" v "]") == 1 {p=1; next} /^## \[/ {p=0} p' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
-          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then
-            echo "::error ::CHANGELOG.md has no section for [$v]"
+          if ! grep -q '^[[:space:]]*- ' "$RUNNER_TEMP/notes.md"; then
+            echo "::error ::CHANGELOG.md has no section with entries for [$v]"
             exit 1
           fi
 
@@ -155,23 +160,28 @@ jobs:
           { echo "NAME=$name"; echo "VERSION=$v"; echo "PUBLIC=$public"; } >> "$GITHUB_ENV"
           echo "$name@$v public on npm: $public"
 
-      # A DRAFT until the version is public on npm: a pending or rejected stage never leaves a published release for a
-      # version nobody can install. A re-run after the approval publishes the draft; a published release of a version
-      # that is not public (one made in the GitHub UI) goes back to a draft, with a warning. Only gh's "release not found"
-      # means there is none: any other failure stops the job instead of creating a second release for the tag.
+      # A new release is a DRAFT until the version is public on npm: a pending or rejected stage never leaves a published
+      # release for a version nobody can install. A re-run after the approval publishes the draft. A release that is
+      # already published stays published even when npm answers "not public" (one answer is no reason to withdraw it):
+      # the run warns instead. Only gh's "release not found" means there is none: any other failure stops the job
+      # instead of creating a second release for the tag.
       - name: GitHub Release from the CHANGELOG section — a draft until the npm version is public
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ "$PUBLIC" = 1 ]; then draft=--draft=false; else draft=--draft=true; fi
+          : "${PUBLIC:?set by the public-check step}" "${NAME:?}" "${VERSION:?}"
           if is_draft="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>"$RUNNER_TEMP/gh-view.err")"; then
-            if [ "$PUBLIC" = 0 ] && [ "$is_draft" = false ]; then
-              msg="The published GitHub Release $TAG goes back to a draft: $NAME@$VERSION is not public on npm"
+            publish=()
+            if [ "$PUBLIC" = 1 ]; then
+              publish=(--draft=false)
+            elif [ "$is_draft" = false ]; then
+              msg="The GitHub Release $TAG is published, but $NAME@$VERSION is not public on npm"
               echo "::warning ::$msg"
               echo "### $msg" >> "$GITHUB_STEP_SUMMARY"
             fi
-            gh release edit "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" "$draft"
+            gh release edit "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" "${publish[@]}"
           elif grep -q 'release not found' "$RUNNER_TEMP/gh-view.err"; then
+            if [ "$PUBLIC" = 1 ]; then draft=--draft=false; else draft=--draft=true; fi
             gh release create "$TAG" "$draft" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
           else
             cat "$RUNNER_TEMP/gh-view.err"
@@ -186,6 +196,7 @@ jobs:
       - name: Stage on npm (Trusted Publishing, provenance) unless this version is already public
         run: |
           set -o pipefail # the default bash of a run step has no pipefail: a failing stage behind tee would read as green
+          : "${PUBLIC:?set by the public-check step}" "${NAME:?}" "${VERSION:?}"
           if [ "$PUBLIC" = 1 ]; then
             echo "$NAME@$VERSION is already public on npm; skipping"
           elif ! npm stage publish --provenance --access public --ignore-scripts 2>&1 | tee "$RUNNER_TEMP/stage.log"; then
