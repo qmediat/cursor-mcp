@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `package.json` names the repository as `git+https://…` — the form npm publishes, so a publish prints no auto-correction.
+
 ## [1.0.3] - 2026-09-29
 
 ### Changed
