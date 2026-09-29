@@ -17,9 +17,9 @@
   `tsserver` and no JavaScript API — so an editor set to use the workspace TypeScript version cannot load it from
   `node_modules`; use the editor's bundled one.
 - The release workflow asks npm once whether the version is already public and stops on any answer other than yes
-  or no (a registry error used to read as "not public"); the GitHub Release follows that answer both ways (a draft
-  while the version is not public); the npm it runs is pinned by version and by the sha512 of its tarball; a failed
-  stage is named in the run summary.
+  or no (a registry error used to read as "not public"); a new GitHub Release is a draft until the version is public,
+  and a published one is never withdrawn on npm's answer (the run warns); the npm it runs is pinned by version and by
+  the sha512 of its tarball; a failed stage is named in the run summary.
 
 ## [1.0.2] - 2026-09-23
 
