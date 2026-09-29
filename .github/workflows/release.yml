@@ -2,7 +2,7 @@ name: Release
 
 # A pushed tag v<version> (equal to package.json) → verify (read-only job: tag, manifest and CHANGELOG checks, typecheck, tests, audit of the shipped
 # tree) → publish (the only job with the publishing permissions; installs with --ignore-scripts): a GitHub Release
-# draft from the CHANGELOG section, then `npm stage publish` — public on npm once a maintainer approves it with 2FA; a
+# from the CHANGELOG section (a draft until the version is public on npm), then `npm stage publish` — public on npm once a maintainer approves it with 2FA; a
 # re-run after the approval publishes the draft, a re-run while the version still waits fails at the stage step.
 # `workflow_dispatch` with `tag` releases an existing tag with THIS workflow definition (a tag pushed earlier would
 # otherwise run the workflow as it was at that tag).
@@ -98,8 +98,9 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
       # Staged publishing needs npm 11.15.0+. The release runs ONE npm, pinned by version and by the sha512 of its tarball
-      # (`npm view npm@<version> dist.integrity`): a changed tarball stops here, before anything runs with id-token.
-      # Dependabot does not see this pin: raise both values together, by hand, within npm 11.
+      # (`npm view npm@<version> dist.integrity`): a changed tarball stops here, before that npm is installed and talks to
+      # the registry with the OIDC token. Dependabot does not see this pin: raise both values together, by hand, within
+      # npm 11 — the same pin is in the release workflows of cursor-mcp, gemini-code-context-mcp and ideogram-mcp.
       - name: Pinned npm (staged publishing needs 11.15.0+)
         env:
           NPM_PIN: 11.20.0
@@ -155,16 +156,27 @@ jobs:
           echo "$name@$v public on npm: $public"
 
       # A DRAFT until the version is public on npm: a pending or rejected stage never leaves a published release for a
-      # version nobody can install. A re-run after the approval publishes the draft.
+      # version nobody can install. A re-run after the approval publishes the draft; a published release of a version
+      # that is not public (one made in the GitHub UI) goes back to a draft, with a warning. Only gh's "release not found"
+      # means there is none: any other failure stops the job instead of creating a second release for the tag.
       - name: GitHub Release from the CHANGELOG section — a draft until the npm version is public
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ "$PUBLIC" = 1 ]; then draft=--draft=false; else draft=--draft=true; fi
-          if gh release view "$TAG" > /dev/null 2>&1; then
+          if is_draft="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>"$RUNNER_TEMP/gh-view.err")"; then
+            if [ "$PUBLIC" = 0 ] && [ "$is_draft" = false ]; then
+              msg="The published GitHub Release $TAG goes back to a draft: $NAME@$VERSION is not public on npm"
+              echo "::warning ::$msg"
+              echo "### $msg" >> "$GITHUB_STEP_SUMMARY"
+            fi
             gh release edit "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" "$draft"
-          else
+          elif grep -q 'release not found' "$RUNNER_TEMP/gh-view.err"; then
             gh release create "$TAG" "$draft" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            cat "$RUNNER_TEMP/gh-view.err"
+            echo "::error ::cannot tell whether the GitHub Release $TAG exists (gh release view failed); re-run later"
+            exit 1
           fi
 
       # Staged, never published directly: the version waits on npmjs.com until a maintainer approves it with 2FA
