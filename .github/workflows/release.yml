@@ -2,16 +2,19 @@ name: Release
 
 # A pushed tag v<version> (equal to package.json) → verify (read-only job: tag, manifest and CHANGELOG checks, typecheck, tests, audit of the shipped
 # tree) → publish (the only job with the publishing permissions; installs with --ignore-scripts): a GitHub Release
-# draft from the CHANGELOG section, then `npm stage publish` — public on npm once a maintainer approves it with 2FA; a
-# re-run after the approval publishes the draft, a re-run while the version still waits fails at the stage step.
+# from the CHANGELOG section (a draft until the version is public on npm), then `npm stage publish` — public on npm once a maintainer approves it with 2FA; a
+# re-run after the approval publishes the draft; npm documents no second stage of a version that still waits, so
+# approve or reject that one before a re-run.
 # `workflow_dispatch` with `tag` releases an existing tag with THIS workflow definition (a tag pushed earlier would
 # otherwise run the workflow as it was at that tag).
 # Publishing uses npm Trusted Publishing (OIDC): the package's trusted publisher on npmjs.com names this repository
 # and this workflow file (no environment); the job holds `id-token: write` and no token secret exists. npm attaches
 # the provenance attestation itself; `--provenance` stays explicit so a publish that cannot attest fails instead of
-# shipping silently without one. The trusted publisher is stage-only: the job runs `npm stage publish`, and a version
-# goes public only when a maintainer approves it on npmjs.com with 2FA — a compromised workflow cannot ship alone.
-# Actions are pinned to full commit SHAs; Dependabot keeps the pins current.
+# shipping silently without one. The job only ever runs `npm stage publish`: a version goes public when a maintainer
+# approves it on npmjs.com with 2FA. A compromised workflow cannot ship alone only while the trusted publisher on
+# npmjs.com allows staging and not a direct `npm publish` — an npm setting this repository cannot check.
+# Actions are pinned to full commit SHAs (Dependabot keeps them current); the npm the release runs is pinned by version
+# and by the sha512 of its tarball (raised by hand).
 
 on:
   push:
@@ -56,6 +59,7 @@ jobs:
 
       - name: server.json versions must equal package.json
         run: |
+          # shellcheck disable=SC2016 # the ${...} are the script's own JavaScript template literals
           node -e '
             const s = require("./server.json"); const v = require("./package.json").version;
             const seen = [s.version, ...(s.packages ?? []).map((p) => p.version)];
@@ -66,8 +70,8 @@ jobs:
         run: |
           v="${TAG#v}"
           awk -v v="$v" 'index($0, "## [" v "]") == 1 {p=1; next} /^## \[/ {p=0} p' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
-          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then
-            echo "::error ::CHANGELOG.md has no section for [$v]"
+          if ! grep -q '^[[:space:]]*- ' "$RUNNER_TEMP/notes.md"; then
+            echo "::error ::CHANGELOG.md has no section with entries for [$v]"
             exit 1
           fi
 
@@ -94,13 +98,27 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
-      # Staged publishing needs npm 11.15.0+; the release installs ONE exact version (this file's pinning policy) and checks
-      # that the PATH runs it. Dependabot does not see this pin: raise it by hand within npm 11.
-      - name: npm 11.20.0 (staged publishing, Trusted Publishing)
+      # Staged publishing needs npm 11.15.0+. The release runs ONE npm, pinned by version and by the sha512 of its tarball
+      # (`npm view npm@<version> dist.integrity`): a changed tarball stops here, before that npm is installed and talks to
+      # the registry with the OIDC token. Dependabot does not see this pin: raise both values together, by hand, within
+      # npm 11 — the same pin is in the release workflows of cursor-mcp, gemini-code-context-mcp and ideogram-mcp.
+      - name: Pinned npm (staged publishing needs 11.15.0+)
         env:
           NPM_PIN: 11.20.0
+          NPM_INTEGRITY: sha512-dF3EDFwbYN+N5RUip+ZYDe0NeURK5BgqKOcvT1iNtUYhTMTl0FwWhBuXrS7KtXyduqyTMS5aaQaregnHDAxNgw==
+        working-directory: ${{ runner.temp }}
         run: |
-          npm install -g --ignore-scripts "npm@$NPM_PIN"
+          tgz="$(npm pack "npm@$NPM_PIN" --silent)"
+          if [ ! -f "$tgz" ]; then
+            echo "::error ::npm pack npm@$NPM_PIN printed no tarball name ($tgz)"
+            exit 1
+          fi
+          got="sha512-$(openssl dgst -sha512 -binary "$tgz" | openssl base64 -A)"
+          if [ "$got" != "$NPM_INTEGRITY" ]; then
+            echo "::error ::npm@$NPM_PIN tarball is $got, the pin is $NPM_INTEGRITY"
+            exit 1
+          fi
+          npm install -g --ignore-scripts "./$tgz"
           v="$(npm --version)"
           if [ "$v" != "$NPM_PIN" ]; then
             echo "::error ::npm $v runs, npm $NPM_PIN was installed — the pinned npm is not on the PATH"
@@ -115,31 +133,59 @@ jobs:
         run: |
           v="${TAG#v}"
           awk -v v="$v" 'index($0, "## [" v "]") == 1 {p=1; next} /^## \[/ {p=0} p' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
-          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then
-            echo "::error ::CHANGELOG.md has no section for [$v]"
+          if ! grep -q '^[[:space:]]*- ' "$RUNNER_TEMP/notes.md"; then
+            echo "::error ::CHANGELOG.md has no section with entries for [$v]"
             exit 1
           fi
 
       - run: npm ci --ignore-scripts
       - run: npm run build
 
-      # A DRAFT until the version is public on npm: a pending or rejected stage never leaves a published release for a
-      # version nobody can install. A re-run after the approval publishes the draft.
+      # Asked once, before anything is created or staged. npm answers a missing version (or package) with E404; any other
+      # failure is "cannot tell", which stops the release instead of being read as "not public".
+      - name: Is this version already public on npm?
+        run: |
+          name="$(node -p "require('./package.json').name")"
+          v="$(node -p "require('./package.json').version")"
+          if out="$(npm view "$name@$v" version 2>"$RUNNER_TEMP/npm-view.err")" && [ "$out" = "$v" ]; then
+            public=1
+          elif [ -z "${out:-}" ] && grep -q 'code E404' "$RUNNER_TEMP/npm-view.err"; then
+            public=0
+          else
+            cat "$RUNNER_TEMP/npm-view.err"
+            echo "::error ::cannot tell whether $name@$v is public on npm (npm view failed without a 404); re-run later"
+            exit 1
+          fi
+          { echo "NAME=$name"; echo "VERSION=$v"; echo "PUBLIC=$public"; } >> "$GITHUB_ENV"
+          echo "$name@$v public on npm: $public"
+
+      # A new release is a DRAFT until the version is public on npm: a pending or rejected stage never leaves a published
+      # release for a version nobody can install. A re-run after the approval publishes the draft. A release that is
+      # already published stays published even when npm answers "not public" (one answer is no reason to withdraw it):
+      # the run warns instead. Only gh's "release not found" means there is none: any other failure stops the job
+      # instead of creating a second release for the tag.
       - name: GitHub Release from the CHANGELOG section — a draft until the npm version is public
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          name="$(node -p "require('./package.json').name")"
-          v="$(node -p "require('./package.json').version")"
-          public=0
-          [ "$(npm view "$name@$v" version 2>/dev/null)" = "$v" ] && public=1
-          if gh release view "$TAG" > /dev/null 2>&1; then
-            if [ "$public" = 1 ]; then draft=--draft=false; else draft=; fi
-            gh release edit "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" $draft
-          elif [ "$public" = 1 ]; then
-            gh release create "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+          : "${PUBLIC:?set by the public-check step}" "${NAME:?}" "${VERSION:?}"
+          if is_draft="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>"$RUNNER_TEMP/gh-view.err")"; then
+            publish=()
+            if [ "$PUBLIC" = 1 ]; then
+              publish=(--draft=false)
+            elif [ "$is_draft" = false ]; then
+              msg="The GitHub Release $TAG is published, but $NAME@$VERSION is not public on npm"
+              echo "::warning ::$msg"
+              echo "### $msg" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            gh release edit "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" "${publish[@]}"
+          elif grep -q 'release not found' "$RUNNER_TEMP/gh-view.err"; then
+            if [ "$PUBLIC" = 1 ]; then draft=--draft=false; else draft=--draft=true; fi
+            gh release create "$TAG" "$draft" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
           else
-            gh release create "$TAG" --draft --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+            cat "$RUNNER_TEMP/gh-view.err"
+            echo "::error ::cannot tell whether the GitHub Release $TAG exists (gh release view failed); re-run later"
+            exit 1
           fi
 
       # Staged, never published directly: the version waits on npmjs.com until a maintainer approves it with 2FA
@@ -149,16 +195,17 @@ jobs:
       - name: Stage on npm (Trusted Publishing, provenance) unless this version is already public
         run: |
           set -o pipefail # the default bash of a run step has no pipefail: a failing stage behind tee would read as green
-          name="$(node -p "require('./package.json').name")"
-          v="$(node -p "require('./package.json').version")"
-          if [ "$(npm view "$name@$v" version 2>/dev/null)" = "$v" ]; then
-            echo "$name@$v is already on npm; skipping"
+          : "${PUBLIC:?set by the public-check step}" "${NAME:?}" "${VERSION:?}"
+          if [ "$PUBLIC" = 1 ]; then
+            echo "$NAME@$VERSION is already public on npm; skipping"
+          elif ! npm stage publish --provenance --access public --ignore-scripts 2>&1 | tee "$RUNNER_TEMP/stage.log"; then
+            echo "### Staging $NAME@$VERSION failed — npm's answer is in the job log" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           else
-            npm stage publish --provenance --access public --ignore-scripts 2>&1 | tee "$RUNNER_TEMP/stage.log"
             {
-              echo "### $name@$v is staged — not public until a maintainer approves it"
+              echo "### $NAME@$VERSION is staged — not public until a maintainer approves it"
               echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID · commit $GITHUB_SHA"
-              echo "Approve with 2FA: https://www.npmjs.com/package/$name → **Staged Packages** → **Approve**, or \`npm stage approve <stage-id>\`."
+              echo "Approve with 2FA: https://www.npmjs.com/package/$NAME → **Staged Packages** → **Approve**, or \`npm stage approve <stage-id>\`."
               echo '<details><summary>stage log (the stage id is in it)</summary>'
               echo
               echo '```'
