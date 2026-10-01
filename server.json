@@ -31,6 +31,13 @@
           "name": "CURSOR_ALLOW_YOLO"
         },
         {
+          "description": "`enabled` or `disabled`, passed to cursor-agent as --sandbox <mode>: confines what an auto-approved agent may run. Unset leaves the CLI's default; any other value ends the server at startup.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "CURSOR_SANDBOX"
+        },
+        {
           "name": "CURSOR_KILL_GRACE_MS",
           "description": "After SIGTERM (timeout or cancellation), a child still alive this long is sent SIGKILL. A positive integer of milliseconds; default 5000.",
           "isRequired": false,

@@ -46,6 +46,7 @@ export async function handleCursorReply(args: CursorReplyArgs, extra?: ToolExtra
     ...(extra?.signal ? { signal: extra.signal } : {}),
     onEvent: (event) => observer.on(event),
   });
+  await observer.drain(); // every progress notification lands before the result
   const report = buildReport(result.parsed, result.stderr, observer, args.session_id);
   if (report.session_id) sessionStore.record(report.session_id, args.prompt, { model: args.model });
   return toCallToolResult(report);

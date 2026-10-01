@@ -319,11 +319,12 @@ async function executeInternal(options: ExecuteOptions): Promise<ExecuteResult> 
         finish(new CursorCliError(null, stderr, `cursor-agent was killed by ${signalCode ?? "a signal"}`));
         return;
       }
-      if (exitCode !== 0) {
+      parser?.end(); // the terminal line may have no newline
+      if (exitCode !== 0 && streamResult === undefined) {
         finish(new CursorCliError(exitCode, stderr, `cursor-agent exited with code ${exitCode}`));
         return;
       }
-      parser?.end();
+      // a result event is the agent's own report (an error run included): it wins over the exit code
       finish(null, parseResult(stdout, stderr, exitCode, parseJson, streamResult));
     };
 
@@ -371,8 +372,8 @@ function parseResult(
   }
   if (parseJson && stdout) {
     try {
-      const raw = JSON.parse(stdout);
-      result.parsed = CursorResultSchema.parse(raw);
+      const raw = CursorResultSchema.parse(JSON.parse(stdout));
+      if (raw.type === "result") result.parsed = raw; // a lone event of another kind is not a run's result
     } catch {
       // JSON parse failed — return raw stdout, not an error.
       // cursor-agent may output non-JSON in some modes (e.g., `ls`).

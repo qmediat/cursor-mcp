@@ -1,4 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
+import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { cursorAgentInputSchema, handleCursorAgent } from "./tools/cursor-agent.js";
 import { cursorReplyInputSchema, handleCursorReply } from "./tools/cursor-reply.js";
@@ -11,12 +13,12 @@ import { CursorCliError, CursorTimeoutError, CursorNotFoundError, CursorAbortErr
 import { createRequire } from "node:module";
 
 /** The request's signal and, when the client asked for progress, its token and the notifier. */
-function toolExtra(extra: { signal: AbortSignal; _meta?: { progressToken?: string | number }; sendNotification: (n: never) => Promise<void> }): ToolExtra {
+function toolExtra(extra: RequestHandlerExtra<ServerRequest, ServerNotification>): ToolExtra {
   const progressToken = extra._meta?.progressToken;
   return {
     signal: extra.signal,
     ...(progressToken !== undefined ? { progressToken } : {}),
-    sendNotification: extra.sendNotification as ToolExtra["sendNotification"],
+    sendNotification: extra.sendNotification,
   };
 }
 

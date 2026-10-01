@@ -66,8 +66,8 @@ export interface ToolCallSummary {
   readonly name: string;
   readonly target: string | null;
   readonly writes: boolean;
-  /** `true` when the completed call reports `result.success`; `false` for any other result (rejected without
-   * `--force`, an error, a shape this package does not know) or a started event. */
+  /** `true` when the completed call reports a `result.success` that is not false/null; `false` for any other result
+   * (rejected without `--force`, an error, a shape this package does not know) or a started event. */
   readonly succeeded: boolean;
 }
 
@@ -86,16 +86,24 @@ export function summarizeToolCall(event: ToolCall): ToolCallSummary {
     }
   }
   const result = (call as { result?: unknown })?.result;
-  const succeeded = typeof result === "object" && result !== null && "success" in result;
+  const success = typeof result === "object" && result !== null ? (result as { success?: unknown }).success : undefined;
+  const succeeded = success !== undefined && success !== null && success !== false; // a value, not a key
   return { name, target, writes: WRITE_KINDS.test(name), succeeded };
 }
 
 /** Splits a byte stream into lines and parses each as a stream-json event. A line that is not JSON (a stray log
  * line) is counted and passed to `onNoise`, never dropped silently; a JSON line that fits no shape is `OtherEvent`. */
+/** The longest line kept while waiting for its newline; past it the line is noise (a transcript, not an event). */
+export const MAX_LINE_BYTES = 8 * 1024 * 1024;
+/** How many noise lines are kept verbatim (the rest are counted). */
+export const NOISE_SAMPLE = 5;
+
 export class NdjsonParser {
   private buffer = "";
   private readonly decoder = new StringDecoder("utf8"); // a multi-byte character may be split across chunks
+  /** The first few non-event lines, verbatim; `noiseCount` has them all. */
   readonly noise: string[] = [];
+  noiseCount = 0;
 
   constructor(
     private readonly onEvent: (event: StreamEvent) => void,
@@ -109,6 +117,10 @@ export class NdjsonParser {
       this.line(this.buffer.slice(0, at));
       this.buffer = this.buffer.slice(at + 1);
       at = this.buffer.indexOf("\n");
+    }
+    if (this.buffer.length > MAX_LINE_BYTES) {
+      this.line(this.buffer); // too long to be an event: judged now, not kept
+      this.buffer = "";
     }
   }
 
@@ -126,15 +138,17 @@ export class NdjsonParser {
     try {
       parsed = JSON.parse(text);
     } catch {
-      this.noise.push(text);
-      this.onNoise?.(text);
+      this.noisy(text);
       return;
     }
     const event = StreamEvent.safeParse(parsed);
     if (event.success) this.onEvent(event.data);
-    else {
-      this.noise.push(text);
-      this.onNoise?.(text);
-    }
+    else this.noisy(text);
+  }
+
+  private noisy(text: string): void {
+    this.noiseCount += 1;
+    if (this.noise.length < NOISE_SAMPLE) this.noise.push(text.length > 500 ? `${text.slice(0, 500)}…` : text);
+    this.onNoise?.(text);
   }
 }
