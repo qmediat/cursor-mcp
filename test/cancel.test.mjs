@@ -17,9 +17,10 @@ const fs = require("node:fs");
 if (process.env.FAKE_GRANDCHILD) {
   // a helper that inherits the pipes and outlives its parent unless the group is signalled; with FAKE_STUBBORN_HELPER
   // it ignores SIGTERM too (only SIGKILL ends it)
+  const stdio = process.env.FAKE_HELPER_NO_PIPES ? "ignore" : "inherit";
   const helper = process.env.FAKE_STUBBORN_HELPER
-    ? require("node:child_process").spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setTimeout(() => {}, 30_000)"], { stdio: "inherit" })
-    : require("node:child_process").spawn("sleep", ["30"], { stdio: "inherit" });
+    ? require("node:child_process").spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setTimeout(() => {}, 30_000)"], { stdio })
+    : require("node:child_process").spawn("sleep", ["30"], { stdio });
   fs.writeFileSync(${JSON.stringify(pidFile)} + ".helper", String(helper.pid));
 }
 fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
@@ -228,6 +229,59 @@ test("the server's shutdown reaches a helper whose leader already exited (the gr
   await new Promise((r) => server.once("exit", r));
   await sleep(200);
   assert.ok(!alive(helperPid), "the helper was SIGKILLed by the server's shutdown");
+});
+
+test("a stubborn helper that redirected its stdio (the pipes close with the leader) is still SIGKILLed at the deadline", async () => {
+  await fresh();
+  process.env.FAKE_GRANDCHILD = "1";
+  process.env.FAKE_STUBBORN_HELPER = "1";
+  process.env.FAKE_HELPER_NO_PIPES = "1";
+  process.env.FAKE_OBEYS_TERM = "1";
+  let helperPid;
+  try {
+    const ac = new AbortController();
+    const call = execute({ args: ["-p", "x"], timeoutMs: 10_000, signal: ac.signal });
+    await childPid();
+    helperPid = Number(await readFile(`${pidFile}.helper`, "utf8"));
+    await sleep(200);
+    ac.abort();
+    await assert.rejects(call, CursorAbortError);
+    assert.ok(alive(helperPid), "the helper survived SIGTERM and holds no pipe");
+    await sleep(300 + 300);
+    assert.ok(!alive(helperPid), "SIGKILL reached the group at the deadline");
+  } finally {
+    delete process.env.FAKE_GRANDCHILD;
+    delete process.env.FAKE_STUBBORN_HELPER;
+    delete process.env.FAKE_HELPER_NO_PIPES;
+    delete process.env.FAKE_OBEYS_TERM;
+  }
+});
+
+test("a second signal during the shutdown grace ends the server at once, SIGKILL first", async () => {
+  await fresh();
+  const { spawn } = await import("node:child_process");
+  const script = `
+    const { execute, installShutdownHandlers } = await import(${JSON.stringify(new URL("../dist/executor.js", import.meta.url).href)});
+    installShutdownHandlers();
+    execute({ args: ["-p", "x"], timeoutMs: 30_000, parseJson: false }).catch(() => {});
+    setTimeout(() => {}, 60_000);
+  `;
+  const server = spawn(process.execPath, ["--input-type=module", "-e", script], {
+    stdio: ["ignore", "ignore", "inherit"],
+    env: { ...process.env, FAKE_GRANDCHILD: "1", FAKE_STUBBORN_HELPER: "1", FAKE_HELPER_NO_PIPES: "1", FAKE_EXITS_AT_ONCE: "1", CURSOR_KILL_GRACE_MS: "20000" },
+  });
+  await childPid();
+  const helperPid = Number(await readFile(`${pidFile}.helper`, "utf8"));
+  await sleep(300);
+  assert.ok(alive(helperPid));
+  const signalled = Date.now();
+  server.kill("SIGTERM");
+  await sleep(100);
+  server.kill("SIGTERM");
+  await new Promise((r) => server.once("exit", r));
+  assert.ok(Date.now() - signalled < 5_000, "no 20 s grace after the second signal");
+  await sleep(200);
+  assert.ok(!alive(helperPid), "the helper was SIGKILLed before the server ended");
 });
 
 test("the tool handler passes the request signal on: handleCursorAgent is cancelled through it", async () => {

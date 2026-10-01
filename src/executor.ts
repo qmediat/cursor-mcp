@@ -92,38 +92,64 @@ const semaphore = new Semaphore(parseMaxConcurrency(process.env.CURSOR_MAX_CONCU
 const killGraceMs = parseKillGraceMs(process.env.CURSOR_KILL_GRACE_MS);
 
 /** The cursor-agent groups that may still have a member: the server's own shutdown signals them, since a detached
- * group does not receive the terminal's SIGINT/SIGHUP with the server. A group stays here until its pipes closed (every
- * holder exited) or its SIGKILL was sent — the leader's own exit is not the group's end. */
+ * group does not receive the terminal's SIGINT/SIGHUP with the server. A group is tracked until no member answers
+ * (`groupAlive`) — checked when its pipes close and before every shutdown signal, never inferred from the leader's exit
+ * or from the pipes alone (a helper may have redirected its stdio) — or until its SIGKILL was sent. */
 const live = new Set<ChildProcess>();
 
+/** Whether any member of the child's process group still exists (signal 0 probes without delivering). */
+function groupAlive(child: ChildProcess): boolean {
+  if (child.pid === undefined) return false;
+  try {
+    if (process.platform === "win32") return child.exitCode === null && child.signalCode === null;
+    process.kill(-child.pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function signalChildGroup(child: ChildProcess, sig: NodeJS.Signals): void {
+  if (child.pid === undefined) return;
+  try {
+    if (process.platform === "win32") child.kill(sig);
+    else process.kill(-child.pid, sig);
+  } catch {
+    // no member left (ESRCH) or not ours: nothing to signal
+  }
+}
+
+/** Signals every tracked group that still has a member and forgets the rest. */
 function shutdownGroups(sig: NodeJS.Signals): void {
   for (const child of live) {
-    if (child.pid === undefined) continue;
-    try {
-      if (process.platform === "win32") child.kill(sig);
-      else process.kill(-child.pid, sig);
-    } catch {
-      // already gone
-    }
+    if (groupAlive(child)) signalChildGroup(child, sig);
+    else live.delete(child);
   }
 }
 
 // A signal to the server: every group gets SIGTERM, SIGKILL after the grace period if any is still there, and the
-// server then ends by the signal's default action (the handler is gone after once). An exit the server cannot delay
-// (stdin closed, an explicit exit) sends SIGKILL: no agent outlives the server.
+// server then ends by the signal's default action. A second signal during the grace ends it at once, SIGKILL first.
+// An exit the server cannot delay (stdin closed, an explicit exit) sends SIGKILL: no agent outlives the server.
 let shutdownInstalled = false;
 
 /** The server entry point installs this once; a host that only imports the executor (a test) keeps its own signals. */
 export function installShutdownHandlers(): void {
   if (shutdownInstalled) return;
   shutdownInstalled = true;
+  let ending = false;
   for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-    process.once(sig, () => {
-      shutdownGroups("SIGTERM");
+    process.on(sig, () => {
       const end = (): void => {
         shutdownGroups("SIGKILL");
-        process.kill(process.pid, sig);
+        process.removeAllListeners(sig);
+        process.kill(process.pid, sig); // the default action ends the server
       };
+      if (ending) {
+        end();
+        return;
+      }
+      ending = true;
+      shutdownGroups("SIGTERM");
       if (live.size === 0) end();
       else setTimeout(end, killGraceMs);
     });
@@ -165,25 +191,19 @@ async function executeInternal(options: ExecuteOptions): Promise<ExecuteResult> 
 
     // The group may outlive its leader: the signal goes to the group while any member exists, never to the leader's
     // pid alone once it has exited (a pid can be reused).
-    const signalGroup = (sig: NodeJS.Signals): void => {
-      if (child.pid === undefined) return;
-      try {
-        if (process.platform === "win32") child.kill(sig);
-        else process.kill(-child.pid, sig);
-      } catch {
-        // no member left (ESRCH) or not ours: nothing to signal
-      }
-    };
+    const signalGroup = (sig: NodeJS.Signals): void => signalChildGroup(child, sig);
 
     // A cancellation (the client's signal or the timeout) sends SIGTERM to the group; SIGKILL follows after the grace
-    // period whatever the leader did meanwhile — a helper that ignores SIGTERM dies with it. The promise (and the
-    // semaphore slot behind it) is released once the leader is gone — on `exit`, not `close`.
+    // period whatever the leader did meanwhile — a helper that ignores SIGTERM dies with it, whether or not it kept
+    // the pipes. The deadline is never withdrawn: at it, a group with no member left is simply forgotten. The promise
+    // (and the semaphore slot behind it — a count of cursor-agent processes, which the leader was) is released once
+    // the leader is gone — on `exit`, not `close`; its helpers have until the deadline.
     let abortError: Error | null = null;
     let sigkillTimer: NodeJS.Timeout | undefined;
     const escalate = (): void => {
       if (sigkillTimer !== undefined) return;
       sigkillTimer = setTimeout(() => {
-        signalGroup("SIGKILL");
+        if (groupAlive(child)) signalGroup("SIGKILL");
         live.delete(child);
       }, killGraceMs);
       sigkillTimer.unref(); // the deadline holds, but it never keeps the server alive on its own
@@ -257,11 +277,10 @@ async function executeInternal(options: ExecuteOptions): Promise<ExecuteResult> 
     });
 
     child.on("close", (exitCode, signalCode) => {
-      // every holder of the pipes has exited: the group is taken as gone, and a SIGKILL still pending is withdrawn so
-      // that a reused group id is never signalled
+      // the pipes closed: a group with no member left is forgotten; one with a member (a helper that redirected its
+      // stdio) stays tracked for the shutdown and for a pending deadline
       if (closeTimer !== undefined) clearTimeout(closeTimer);
-      if (sigkillTimer !== undefined) clearTimeout(sigkillTimer);
-      live.delete(child);
+      if (!groupAlive(child)) live.delete(child);
       settleFromBuffers(exitCode, signalCode);
     });
   });

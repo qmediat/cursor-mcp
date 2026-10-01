@@ -27,7 +27,7 @@ export class CursorNotFoundError extends Error {
   constructor() {
     super(
       "cursor-agent binary not found. Install it: curl https://cursor.com/install -fsS | bash\n" +
-      "Then authenticate: cursor-agent login",
+      "Then authenticate: agent login",
     );
     this.name = "CursorNotFoundError";
   }
