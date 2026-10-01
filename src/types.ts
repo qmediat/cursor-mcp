@@ -27,11 +27,10 @@ export const CursorResultSchema = z.object({
 }).passthrough();
 
 export type CursorResult = z.infer<typeof CursorResultSchema>;
-export type CursorModelType = z.infer<typeof CursorModel>;
 export type CursorModeType = z.infer<typeof CursorMode>;
 
 export const DEFAULT_TIMEOUT_MS = 600_000; // 10 minutes — agent mode can be slow
-/** After SIGTERM (the spawn `signal` option), a child still alive this long is sent SIGKILL (CURSOR_KILL_GRACE_MS overrides). */
+/** After SIGTERM to cursor-agent's process group, SIGKILL follows this many milliseconds later (CURSOR_KILL_GRACE_MS overrides). */
 export const DEFAULT_KILL_GRACE_MS = 5_000;
 /** The longest delay setTimeout honours (2^31 - 1 ms); above it Node fires the timer after 1 ms. */
 export const MAX_TIMER_MS = 2_147_483_647;

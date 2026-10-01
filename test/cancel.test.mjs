@@ -12,14 +12,21 @@ const pidFile = join(dir, "child.pid");
 await writeFile(
   join(dir, "cursor-agent"),
   `#!/usr/bin/env node
-process.on("SIGTERM", () => {});
+if (!process.env.FAKE_OBEYS_TERM) process.on("SIGTERM", () => {});
 const fs = require("node:fs");
 if (process.env.FAKE_GRANDCHILD) {
-  // a helper that inherits the pipes and outlives its parent unless the group is signalled
-  const helper = require("node:child_process").spawn("sleep", ["30"], { stdio: "inherit" });
+  // a helper that inherits the pipes and outlives its parent unless the group is signalled; with FAKE_STUBBORN_HELPER
+  // it ignores SIGTERM too (only SIGKILL ends it)
+  const helper = process.env.FAKE_STUBBORN_HELPER
+    ? require("node:child_process").spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setTimeout(() => {}, 30_000)"], { stdio: "inherit" })
+    : require("node:child_process").spawn("sleep", ["30"], { stdio: "inherit" });
   fs.writeFileSync(${JSON.stringify(pidFile)} + ".helper", String(helper.pid));
 }
 fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+if (process.env.FAKE_EXITS_AT_ONCE) {
+  process.stdout.write("done");
+  process.exit(0);
+}
 setTimeout(() => {}, 30_000);
 `,
 );
@@ -130,6 +137,72 @@ test("a request cancelled while it waits for a slot leaves the queue at once; th
   assert.equal(Number(await readFile(pidFile, "utf8")), pid, "the queued call never spawned");
   ac.abort();
   await assert.rejects(running, CursorAbortError);
+});
+
+test("a leader that exits while a helper holds the pipes: the call settles with its output after the grace, the helper is killed", async () => {
+  await fresh();
+  process.env.FAKE_GRANDCHILD = "1";
+  process.env.FAKE_EXITS_AT_ONCE = "1";
+  let helperPid;
+  try {
+    const started = Date.now();
+    const result = await execute({ args: ["-p", "x"], timeoutMs: 10_000, parseJson: false });
+    helperPid = Number(await readFile(`${pidFile}.helper`, "utf8"));
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stdout, "done", "what the leader wrote before it exited");
+    assert.ok(Date.now() - started < 5_000, "settled without the helper's 30 s");
+  } finally {
+    delete process.env.FAKE_GRANDCHILD;
+    delete process.env.FAKE_EXITS_AT_ONCE;
+  }
+  await sleep(100);
+  assert.ok(!alive(helperPid), "the helper was signalled with the group");
+});
+
+test("a helper that ignores SIGTERM is SIGKILLed at the deadline even though the leader obeyed SIGTERM", async () => {
+  await fresh();
+  process.env.FAKE_GRANDCHILD = "1";
+  process.env.FAKE_STUBBORN_HELPER = "1";
+  process.env.FAKE_OBEYS_TERM = "1";
+  let helperPid;
+  try {
+    const ac = new AbortController();
+    const call = execute({ args: ["-p", "x"], timeoutMs: 10_000, signal: ac.signal });
+    await childPid();
+    helperPid = Number(await readFile(`${pidFile}.helper`, "utf8"));
+    await sleep(200); // the helper's node is up and ignores SIGTERM
+    ac.abort();
+    await assert.rejects(call, CursorAbortError);
+    assert.ok(alive(helperPid), "the helper survived SIGTERM (the leader did not)");
+    await sleep(300 + 300);
+    assert.ok(!alive(helperPid), "SIGKILL reached the group at the deadline");
+  } finally {
+    delete process.env.FAKE_GRANDCHILD;
+    delete process.env.FAKE_STUBBORN_HELPER;
+    delete process.env.FAKE_OBEYS_TERM;
+  }
+});
+
+test("the server's own SIGTERM ends every running cursor-agent group", async () => {
+  await fresh();
+  const { spawn } = await import("node:child_process");
+  const script = `
+    const { execute } = await import(${JSON.stringify(new URL("../dist/executor.js", import.meta.url).href)});
+    execute({ args: ["-p", "x"], timeoutMs: 30_000 }).catch(() => {});
+    setTimeout(() => {}, 60_000);
+  `;
+  const server = spawn(process.execPath, ["--input-type=module", "-e", script], {
+    stdio: ["ignore", "ignore", "inherit"],
+    env: { ...process.env, FAKE_GRANDCHILD: "1" },
+  });
+  const pid = await childPid();
+  const helperPid = Number(await readFile(`${pidFile}.helper`, "utf8"));
+  assert.ok(alive(pid) && alive(helperPid));
+  server.kill("SIGTERM");
+  await new Promise((r) => server.once("exit", r));
+  await sleep(200);
+  assert.ok(!alive(pid), "the agent is gone with the server");
+  assert.ok(!alive(helperPid), "its helper too");
 });
 
 test("the tool handler passes the request signal on: handleCursorAgent is cancelled through it", async () => {

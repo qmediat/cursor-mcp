@@ -23,7 +23,11 @@ server unusable with current Cursor models and several promises the code did not
   optional value) and bypassed the `CURSOR_ALLOW_YOLO` gate, and a prompt starting with `-` was an unknown option.
   A cancelled request settles only once the child itself has exited (not once its pipes close: a helper still holding
   them cannot keep the request alive), so its concurrency slot is never reused while the old process still runs
-  (`CURSOR_KILL_GRACE_MS`, default 5000). A child killed by something other than the request (an operator, the OOM
+  (`CURSOR_KILL_GRACE_MS`, default 5000); the SIGKILL deadline holds whatever the leader did, so a helper that ignores
+  SIGTERM dies with it. A leader that exits while a helper holds the pipes no longer hangs the call: after the same grace
+  the group is signalled and the call settles with what was read. The server's own SIGINT/SIGTERM/SIGHUP sends SIGTERM to
+  every running group, SIGKILL after the grace, then ends; an exit it cannot delay sends SIGKILL — no agent outlives the
+  server (cursor-agent runs detached, so the terminal's signals do not reach it on their own). A child killed by something other than the request (an operator, the OOM
   killer) is an error, not an empty success. `cursor_models` and `cursor_health` are cancellable too, and a request
   cancelled while it waits for a concurrency slot leaves the queue at once instead of running later for nobody.
   `workspace` is validated like `session_id`: a value that reads as an option is refused. `CURSOR_KILL_GRACE_MS` above
@@ -43,7 +47,9 @@ server unusable with current Cursor models and several promises the code did not
   contract, the concurrency parser and the models cleaner on the CLI's real bytes; `test/cancel.test.mjs` runs a fake
   `cursor-agent` that ignores SIGTERM and proves the cancellation reaches it, SIGKILL follows, and the slot is held
   until then, that a signal aborted before the call still ends the child, and that a helper holding the pipes neither
-  survives the cancellation nor keeps the request alive; the smoke test asserts the model schema has no enum. Published JavaScript changes in this release.
+  survives the cancellation nor keeps the request alive, that a leader exiting under a pipe-holding helper still settles
+  and the helper is killed, that a SIGTERM-ignoring helper is SIGKILLed at the deadline, and that the server's SIGTERM ends
+  every running group; the smoke test asserts the model schema has no enum. Published JavaScript changes in this release.
 - `package.json` names the repository as `git+https://…` — the form npm publishes, so a publish prints no auto-correction.
 
 ## [1.0.3] - 2026-09-29

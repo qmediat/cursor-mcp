@@ -1,5 +1,6 @@
 import { z } from "zod/v4";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { CursorAbortError } from "../errors.js";
 import { execute, parseMaxConcurrency } from "../executor.js";
 import { which } from "../utils.js";
 import { CURSOR_BINARY } from "../types.js";
@@ -29,7 +30,8 @@ export async function handleCursorHealth(signal?: AbortSignal): Promise<CallTool
         ...(signal ? { signal } : {}),
       });
       checks.push(`[OK] Version: ${result.stdout}`);
-    } catch {
+    } catch (error) {
+      if (error instanceof CursorAbortError) throw error; // a cancelled health check is not an unhealthy CLI
       checks.push("[FAIL] Could not get version");
       healthy = false;
     }

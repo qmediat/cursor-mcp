@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { which } from "./utils.js";
 import { CursorCliError, CursorTimeoutError, CursorNotFoundError, CursorAbortError } from "./errors.js";
 import { CursorResultSchema, DEFAULT_TIMEOUT_MS, CURSOR_BINARY, DEFAULT_KILL_GRACE_MS, DEFAULT_MAX_CONCURRENCY, MAX_TIMER_MS, MAX_CONCURRENCY_LIMIT } from "./types.js";
@@ -91,6 +91,38 @@ export function parseKillGraceMs(raw: string | undefined): number {
 const semaphore = new Semaphore(parseMaxConcurrency(process.env.CURSOR_MAX_CONCURRENCY));
 const killGraceMs = parseKillGraceMs(process.env.CURSOR_KILL_GRACE_MS);
 
+/** The cursor-agent groups running now: the server's own shutdown signals them, since a detached group does not
+ * receive the terminal's SIGINT/SIGHUP with the server. */
+const live = new Set<ChildProcess>();
+
+function shutdownGroups(sig: NodeJS.Signals): void {
+  for (const child of live) {
+    if (child.pid === undefined) continue;
+    try {
+      if (process.platform === "win32") child.kill(sig);
+      else process.kill(-child.pid, sig);
+    } catch {
+      // already gone
+    }
+  }
+}
+
+// A signal to the server: every group gets SIGTERM, SIGKILL after the grace period if any is still there, and the
+// server then ends by the signal's default action (the handler is gone after once). An exit the server cannot delay
+// (stdin closed, an explicit exit) sends SIGKILL: no agent outlives the server.
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+  process.once(sig, () => {
+    shutdownGroups("SIGTERM");
+    const end = (): void => {
+      shutdownGroups("SIGKILL");
+      process.kill(process.pid, sig);
+    };
+    if (live.size === 0) end();
+    else setTimeout(end, killGraceMs);
+  });
+}
+process.on("exit", () => shutdownGroups("SIGKILL"));
+
 export async function execute(options: ExecuteOptions): Promise<ExecuteResult> {
   const release = await semaphore.acquire(options.signal);
   try {
@@ -113,48 +145,47 @@ async function executeInternal(options: ExecuteOptions): Promise<ExecuteResult> 
   return new Promise<ExecuteResult>((resolve, reject) => {
     let settled = false;
 
-    // Its own process group (POSIX): a cancellation reaches cursor-agent's children too, so none keeps editing
-    // after the request is reported aborted, and a grandchild that inherited the pipes cannot keep the request alive.
+    // Its own process group (POSIX): a cancellation reaches cursor-agent's helpers too, so none keeps editing after
+    // the request is reported aborted, and a helper that inherited the pipes cannot keep the request alive. The
+    // server's own shutdown signals every live group (see `shutdownGroups`).
     const child = spawn(binary, args, {
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env },
       detached: process.platform !== "win32",
     });
+    live.add(child);
 
-    const killTree = (sig: NodeJS.Signals): void => {
-      if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
+    // The group may outlive its leader: the signal goes to the group while any member exists, never to the leader's
+    // pid alone once it has exited (a pid can be reused).
+    const signalGroup = (sig: NodeJS.Signals): void => {
+      if (child.pid === undefined) return;
       try {
         if (process.platform === "win32") child.kill(sig);
         else process.kill(-child.pid, sig);
       } catch {
-        try {
-          child.kill(sig); // no group to signal (already gone): the child itself
-        } catch {
-          // gone between the checks
-        }
+        // no member left (ESRCH) or not ours: nothing to signal
       }
     };
 
     // A cancellation (the client's signal or the timeout) sends SIGTERM to the group; SIGKILL follows after the grace
-    // period unless the child has exited. The promise (and the semaphore slot behind it) is released only once the
-    // child itself is gone — on `exit`, not `close`: a grandchild that still holds the pipes was signalled with the
-    // group and may not keep the slot.
+    // period whatever the leader did meanwhile — a helper that ignores SIGTERM dies with it. The promise (and the
+    // semaphore slot behind it) is released once the leader is gone — on `exit`, not `close`.
     let abortError: Error | null = null;
-    let killTimer: NodeJS.Timeout | undefined;
+    let sigkillTimer: NodeJS.Timeout | undefined;
+    const escalate = (): void => {
+      if (sigkillTimer !== undefined) return;
+      sigkillTimer = setTimeout(() => signalGroup("SIGKILL"), killGraceMs);
+      sigkillTimer.unref(); // the deadline holds, but it never keeps the server alive on its own
+    };
     const onAbort = (): void => {
       if (abortError !== null) return;
       abortError = timeoutSignal.aborted ? new CursorTimeoutError(timeoutMs) : new CursorAbortError();
-      killTree("SIGTERM");
-      killTimer = setTimeout(() => killTree("SIGKILL"), killGraceMs);
+      signalGroup("SIGTERM");
+      escalate();
     };
     combinedSignal.addEventListener("abort", onAbort, { once: true });
     // a signal that was aborted before the listener existed never fires it
     if (combinedSignal.aborted) onAbort();
-
-    const cleanup = (): void => {
-      if (killTimer !== undefined) clearTimeout(killTimer);
-      combinedSignal.removeEventListener("abort", onAbort);
-    };
 
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
@@ -165,7 +196,7 @@ async function executeInternal(options: ExecuteOptions): Promise<ExecuteResult> 
     const finish = (error: Error | null, result?: ExecuteResult): void => {
       if (settled) return;
       settled = true;
-      cleanup();
+      combinedSignal.removeEventListener("abort", onAbort);
       if (error) reject(error);
       else resolve(result!);
     };
@@ -178,11 +209,7 @@ async function executeInternal(options: ExecuteOptions): Promise<ExecuteResult> 
       }
     });
 
-    child.on("exit", () => {
-      if (abortError !== null) finish(abortError);
-    });
-
-    child.on("close", (exitCode, signalCode) => {
+    const settleFromBuffers = (exitCode: number | null, signalCode: NodeJS.Signals | null): void => {
       if (abortError !== null) {
         finish(abortError);
         return;
@@ -199,20 +226,42 @@ async function executeInternal(options: ExecuteOptions): Promise<ExecuteResult> 
         finish(new CursorCliError(exitCode, stderr, `cursor-agent exited with code ${exitCode}`));
         return;
       }
+      finish(null, parseResult(stdout, stderr, exitCode, parseJson));
+    };
 
-      const result: ExecuteResult = { stdout, stderr, exitCode };
-
-      if (parseJson && stdout) {
-        try {
-          const raw = JSON.parse(stdout);
-          result.parsed = CursorResultSchema.parse(raw);
-        } catch {
-          // JSON parse failed — return raw stdout, not an error.
-          // cursor-agent may output non-JSON in some modes (e.g., `ls`).
-        }
+    // `close` (the pipes closed) normally follows `exit` at once. When it does not, a helper that inherited the
+    // pipes is holding them: the group is signalled and the call settles with what was read, after the same grace.
+    let closeTimer: NodeJS.Timeout | undefined;
+    child.on("exit", (exitCode, signalCode) => {
+      live.delete(child);
+      if (abortError !== null) {
+        finish(abortError);
+        return;
       }
+      closeTimer = setTimeout(() => {
+        signalGroup("SIGTERM");
+        escalate();
+        settleFromBuffers(exitCode, signalCode);
+      }, killGraceMs);
+    });
 
-      finish(null, result);
+    child.on("close", (exitCode, signalCode) => {
+      if (closeTimer !== undefined) clearTimeout(closeTimer);
+      settleFromBuffers(exitCode, signalCode);
     });
   });
+}
+
+function parseResult(stdout: string, stderr: string, exitCode: number, parseJson: boolean): ExecuteResult {
+  const result: ExecuteResult = { stdout, stderr, exitCode };
+  if (parseJson && stdout) {
+    try {
+      const raw = JSON.parse(stdout);
+      result.parsed = CursorResultSchema.parse(raw);
+    } catch {
+      // JSON parse failed — return raw stdout, not an error.
+      // cursor-agent may output non-JSON in some modes (e.g., `ls`).
+    }
+  }
+  return result;
 }
