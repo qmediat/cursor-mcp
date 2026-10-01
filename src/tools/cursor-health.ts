@@ -48,7 +48,7 @@ export async function handleCursorHealth(signal?: AbortSignal): Promise<CallTool
       });
       if (result.stdout.toLowerCase().includes("not logged in") ||
           result.stdout.toLowerCase().includes("not authenticated")) {
-        checks.push("[FAIL] Not authenticated. Run: cursor-agent login");
+        checks.push("[FAIL] Not authenticated. Run: agent login");
         healthy = false;
       } else {
         checks.push(`[OK] Auth: ${result.stdout.split("\n")[0]}`);

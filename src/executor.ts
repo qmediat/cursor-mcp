@@ -214,6 +214,8 @@ async function executeInternal(options: ExecuteOptions): Promise<ExecuteResult> 
     // a reused group id is never signalled); at the deadline the group is probed again before SIGKILL. The promise
     // (and the semaphore slot behind it — a count of cursor-agent processes, which the leader was) is released once
     // the leader is gone — on `exit`, not `close`; its helpers have until the deadline.
+    // Residual: the probe and the SIGKILL are two calls, so a group id handed to a new group between them would be hit —
+    // that needs the whole group gone and the pid space wrapped inside the grace; no user-space process can close it.
     let abortError: Error | null = null;
     let sigkillTimer: NodeJS.Timeout | undefined;
     const escalate = (): void => {
