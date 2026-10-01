@@ -7,6 +7,9 @@ import { cursorSessionsInputSchema, handleCursorSessions } from "./tools/cursor-
 import { cursorHealthInputSchema, handleCursorHealth } from "./tools/cursor-health.js";
 import { runReportSchema, type ToolExtra } from "./run-report.js";
 
+import { CursorCliError, CursorTimeoutError, CursorNotFoundError, CursorAbortError } from "./errors.js";
+import { createRequire } from "node:module";
+
 /** The request's signal and, when the client asked for progress, its token and the notifier. */
 function toolExtra(extra: { signal: AbortSignal; _meta?: { progressToken?: string | number }; sendNotification: (n: never) => Promise<void> }): ToolExtra {
   const progressToken = extra._meta?.progressToken;
@@ -16,8 +19,6 @@ function toolExtra(extra: { signal: AbortSignal; _meta?: { progressToken?: strin
     sendNotification: extra.sendNotification as ToolExtra["sendNotification"],
   };
 }
-import { CursorCliError, CursorTimeoutError, CursorNotFoundError, CursorAbortError } from "./errors.js";
-import { createRequire } from "node:module";
 
 // dist/server.js → ../package.json is the package root both in the repository and when installed from npm.
 const { version } = createRequire(import.meta.url)("../package.json") as { version: string };

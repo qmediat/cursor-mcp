@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { NdjsonParser, type StreamEvent } from "./stream.js";
+import { NdjsonParser, ResultEvent, type StreamEvent } from "./stream.js";
 import { which } from "./utils.js";
 import { CursorCliError, CursorTimeoutError, CursorNotFoundError, CursorAbortError } from "./errors.js";
 import { CursorResultSchema, DEFAULT_TIMEOUT_MS, CURSOR_BINARY, DEFAULT_KILL_GRACE_MS, DEFAULT_MAX_CONCURRENCY, MAX_TIMER_MS, MAX_CONCURRENCY_LIMIT } from "./types.js";
@@ -138,6 +138,20 @@ function shutdownGroups(sig: NodeJS.Signals): void {
 // An exit the server cannot delay (stdin closed, an explicit exit) sends SIGKILL: no agent outlives the server.
 let shutdownInstalled = false;
 const SHUTDOWN_POLL_MS = 100;
+/** How much raw stdout is kept while streaming (the fallback when no result event arrives). */
+const MAX_RAW_STDOUT_BYTES = 1024 * 1024;
+
+/** A result event as the non-streaming result: `null` fields become absent. */
+function toCursorResult(event: ResultEvent): CursorResult {
+  const { type, result, request_id, session_id, ...rest } = event;
+  return {
+    type,
+    ...rest,
+    ...(result == null ? {} : { result }),
+    ...(request_id == null ? {} : { request_id }),
+    ...(session_id == null ? {} : { session_id }),
+  };
+}
 
 /** The server entry point installs this once; a host that only imports the executor (a test) keeps its own signals. */
 export function installShutdownHandlers(): void {
@@ -242,17 +256,35 @@ async function executeInternal(options: ExecuteOptions): Promise<ExecuteResult> 
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
 
-    // stream-json: each line is handed to the caller as it arrives; the last `result` event is the run's result
+    // stream-json: each line is handed to the caller as it arrives; the last `result` event is the run's result.
+    // The raw stdout is kept only up to a bound: it serves the non-streaming fallback, not a transcript.
     let streamResult: CursorResult | undefined;
+    let stdoutBytes = 0;
+    // an observer's failure — thrown or rejected — never fails the run
+    const deliver = (event: StreamEvent): void => {
+      if (onEvent === undefined) return;
+      try {
+        void Promise.resolve(onEvent(event)).catch(() => undefined);
+      } catch {
+        // a synchronous throw
+      }
+    };
     const parser =
       onEvent === undefined
         ? undefined
-        : new NdjsonParser((event) => {
-            if (event.type === "result") streamResult = CursorResultSchema.parse(event);
-            void Promise.resolve(onEvent(event)).catch(() => undefined); // an observer's failure never fails the run
-          });
+        : new NdjsonParser(
+            (event) => {
+              if (event.type === "result") {
+                const result = ResultEvent.safeParse(event);
+                if (result.success) streamResult = toCursorResult(result.data);
+              }
+              deliver(event);
+            },
+            (line) => deliver({ type: "noise", line }),
+          );
     child.stdout.on("data", (chunk: Buffer) => {
-      stdoutChunks.push(chunk);
+      if (parser === undefined || stdoutBytes < MAX_RAW_STDOUT_BYTES) stdoutChunks.push(chunk);
+      stdoutBytes += chunk.length;
       parser?.feed(chunk);
     });
     child.stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk));

@@ -3,7 +3,7 @@
 export type OutputFormat = "json" | "stream-json" | "text";
 
 /** CURSOR_SANDBOX: `enabled` or `disabled` is passed as `--sandbox <mode>`; unset leaves the CLI's own default; any
- * other value is a configuration error, said once. */
+ * other value is a configuration error — refused at startup (`index.ts`) and on every call that would use it. */
 export function sandboxArgs(env: NodeJS.ProcessEnv = process.env): string[] {
   const mode = env.CURSOR_SANDBOX;
   if (mode === undefined || mode === "") return [];

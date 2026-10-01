@@ -16,18 +16,28 @@ const EVENTS = [
   { type: "tool_call", subtype: "completed", call_id: "c2", tool_call: { editToolCall: { args: { path: "src/a.ts" }, result: { success: {} } } }, session_id: "s-1" },
   { type: "tool_call", subtype: "completed", call_id: "c3", tool_call: { writeToolCall: { args: { path: "src/b.ts" }, result: { success: {} } } }, session_id: "s-1" },
   { type: "tool_call", subtype: "completed", call_id: "c4", tool_call: { editToolCall: { args: { path: "src/a.ts" }, result: { success: {} } } }, session_id: "s-1" },
+  { type: "tool_call", subtype: "completed", call_id: "c5", tool_call: { editToolCall: { args: { path: "src/c.ts" }, result: { rejected: { reason: "no --force" } } } }, session_id: "s-1" },
+  { type: "tool_call", subtype: "completed", call_id: "c6", tool_call: { shellToolCall: { args: { command: "rm -f src/d.ts" }, result: { success: {} } } }, session_id: "s-1" },
   { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Done." }] }, session_id: "s-1" },
   "this line is not JSON",
   { type: "result", subtype: "success", is_error: false, duration_ms: 1234, duration_api_ms: 1000, result: "Done.", session_id: "s-1", request_id: "r-9" },
 ];
-await writeFile(
-  join(dir, "cursor-agent"),
-  `#!/usr/bin/env node
-const events = ${JSON.stringify(EVENTS)};
-for (const e of events) process.stdout.write((typeof e === "string" ? e : JSON.stringify(e)) + "\\n");
+/** Writes the one fake the executor resolves (it caches the binary's path): the given lines, strings as-is, objects
+ * as JSON, optionally split at a byte offset with a pause between the halves. */
+async function writeFake(lines, splitAt = 0) {
+  const text = `${lines.map((l) => (typeof l === "string" ? l : JSON.stringify(l))).join("\n")}\n`;
+  await writeFile(
+    join(dir, "cursor-agent"),
+    `#!/usr/bin/env node
+const out = Buffer.from(${JSON.stringify(text)}, "utf8");
+const at = ${splitAt};
+if (at > 0) { process.stdout.write(out.subarray(0, at)); setTimeout(() => process.stdout.write(out.subarray(at)), 50); }
+else process.stdout.write(out);
 `,
-);
-await chmod(join(dir, "cursor-agent"), 0o755);
+  );
+  await chmod(join(dir, "cursor-agent"), 0o755);
+}
+await writeFake(EVENTS);
 process.env.PATH = `${dir}:${process.env.PATH}`;
 
 const { handleCursorAgent } = await import("../dist/tools/cursor-agent.js");
@@ -51,17 +61,21 @@ test("cursor_agent reports the model, the files changed (once each) and the answ
   assert.equal(s.request_id, "r-9");
   assert.equal(s.model, "Composer 2.5");
   assert.equal(s.duration_ms, 1234);
-  assert.equal(s.tool_calls, 4, "completed tool calls, started ones not counted twice");
-  assert.deepEqual(s.files_changed, ["src/a.ts", "src/b.ts"], "write/edit targets, each once; the read is not a change");
+  assert.equal(s.tool_calls, 6, "completed tool calls, started ones not counted twice");
+  assert.deepEqual(s.files_changed, ["src/a.ts", "src/b.ts"], "write/edit targets that reported success, each once; the read is not a change");
+  assert.deepEqual(s.files_proposed, ["src/c.ts"], "an edit without success is proposed, not applied");
+  assert.equal(s.noise_lines, 1, "the non-JSON line is counted, never dropped");
   const text = result.content[0].text;
   assert.ok(text.startsWith("Done."));
   assert.ok(text.includes("Model: Composer 2.5"));
   assert.ok(text.includes("Files changed:\n  src/a.ts\n  src/b.ts"));
-  assert.ok(notifications.length >= 6, `one progress notification per interpreted event (${notifications.length})`);
+  assert.ok(text.includes("not applied (no --force, refused or failed):\n  src/c.ts"));
+  assert.ok(text.includes("Non-event stdout lines: 1"));
+  assert.equal(notifications.length, 8, "one per interpreted event: init, 6 completed tool calls, 1 assistant message");
+  assert.ok(notifications.some((n) => n.params.message.includes("editToolCall src/c.ts (not applied)")));
   assert.ok(notifications.every((n) => n.method === "notifications/progress" && n.params.progressToken === "tok-1"));
   assert.ok(notifications.some((n) => n.params.message.includes("editToolCall src/a.ts")));
-  const progress = notifications.map((n) => n.params.progress);
-  assert.deepEqual(progress, [...progress].sort((a, b) => a - b), "progress only grows");
+  assert.deepEqual(notifications.map((n) => n.params.progress), [1, 2, 3, 4, 5, 6, 7, 8], "one counter, one step per event");
 });
 
 test("a client without a progress token gets the same report and no notification", async () => {
@@ -81,4 +95,64 @@ test("the NDJSON parser keeps a non-JSON line as noise and parses a result witho
   parser.end();
   assert.deepEqual(events.map((e) => e.type), ["system", "result"]);
   assert.deepEqual(noise, ["not json"]);
+});
+
+test("a result event with null fields does not crash the server; the nulls become absent fields", async () => {
+  await writeFake([
+    { type: "system", subtype: "init", model: "m", session_id: "s-2" },
+    { type: "result", subtype: "error", is_error: true, result: null, request_id: null, session_id: "s-2" },
+  ]);
+  const { execute } = await import("../dist/executor.js");
+  const r = await execute({ args: ["-p", "x"], timeoutMs: 10_000, onEvent: () => {} });
+  assert.equal(r.parsed.subtype, "error");
+  assert.equal("result" in r.parsed, false);
+});
+
+test("a multi-byte character split across stdout chunks is decoded whole", async () => {
+  const text = "Zażółć gęślą jaźń";
+  const line = JSON.stringify({ type: "result", subtype: "success", is_error: false, result: text, session_id: "s-3" });
+  const at = Buffer.from(line, "utf8").indexOf(Buffer.from("ż", "utf8")) + 1; // inside the two-byte ż
+  await writeFake([line], at);
+  const { execute } = await import("../dist/executor.js");
+  const r = await execute({ args: ["-p", "x"], timeoutMs: 10_000, onEvent: () => {} });
+  assert.equal(r.parsed.result, text);
+});
+
+test("no result event: the last assistant message is the answer, the status says so, the run is an error, the init session is kept", async () => {
+  await writeFake([
+    { type: "system", subtype: "init", model: "m", session_id: "s-4" },
+    { type: "tool_call", subtype: "completed", call_id: "c1", tool_call: { readToolCall: { args: { path: "secret.txt" }, result: { success: { content: "TOP SECRET" } } } } },
+    { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Half done" }] } },
+  ]);
+  const result = await handleCursorAgent({ prompt: "x" });
+  const s = result.structuredContent;
+  assert.equal(s.status, "no-result-event");
+  assert.equal(s.is_error, true);
+  assert.equal(s.result, "Half done", "never the raw transcript");
+  assert.equal(s.session_id, "s-4");
+  assert.ok(!result.content[0].text.includes("TOP SECRET"));
+});
+
+test("an observer that throws synchronously or whose notification rejects never fails the run", async () => {
+  await writeFake(EVENTS);
+  const notifications = [];
+  const extra = {
+    progressToken: 7,
+    sendNotification: async (n) => {
+      notifications.push(n);
+      throw new Error("client gone");
+    },
+  };
+  const result = await handleCursorAgent({ prompt: "fix it" }, extra);
+  assert.equal(result.structuredContent.status, "success");
+  assert.ok(notifications.length > 0);
+  const { execute } = await import("../dist/executor.js");
+  const r = await execute({
+    args: ["-p", "x"],
+    timeoutMs: 10_000,
+    onEvent: () => {
+      throw new Error("sync observer failure");
+    },
+  });
+  assert.equal(r.parsed.subtype, "success");
 });

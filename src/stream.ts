@@ -1,6 +1,7 @@
 /** cursor-agent's `--output-format stream-json`: one JSON object per line. The shapes are from Cursor's reference
  * (cursor.com/docs/cli/reference/output-format): `system` init, `user`, `assistant`, `tool_call` started/completed
  * and the terminal `result`, which has the same shape as the non-streaming JSON output. */
+import { StringDecoder } from "node:string_decoder";
 import { z } from "zod/v4";
 import { CursorResultSchema } from "./types.js";
 
@@ -38,13 +39,26 @@ export const ToolCallEvent = z
   })
   .passthrough();
 
-export const ResultEvent = CursorResultSchema.extend({ type: z.literal("result") });
+/** The terminal event; cursor-agent may send `null` where the non-streaming output omits a field. */
+export const ResultEvent = CursorResultSchema.extend({
+  type: z.literal("result"),
+  result: z.string().nullable().optional(),
+  request_id: z.string().nullable().optional(),
+  session_id: z.string().nullable().optional(),
+});
+export type ResultEvent = z.infer<typeof ResultEvent>;
 
 /** Any other line that parses as JSON with a `type` (a `user` echo, a future kind) is kept but not interpreted. */
 export const OtherEvent = z.object({ type: z.string() }).passthrough();
 
+/** A stdout line that is not a stream-json event (a stray log line), reported, never dropped. */
+export interface NoiseEvent {
+  readonly type: "noise";
+  readonly line: string;
+}
+
 export const StreamEvent = z.union([SystemInitEvent, AssistantEvent, ToolCallEvent, ResultEvent, OtherEvent]);
-export type StreamEvent = z.infer<typeof StreamEvent>;
+export type StreamEvent = z.infer<typeof StreamEvent> | NoiseEvent;
 export type ToolCall = z.infer<typeof ToolCallEvent>;
 
 /** A tool call reduced to what a supervisor wants to see: its kind and the path or command it touched. */
@@ -52,6 +66,9 @@ export interface ToolCallSummary {
   readonly name: string;
   readonly target: string | null;
   readonly writes: boolean;
+  /** `true` when the completed call reports `result.success`; `false` for any other result (rejected without
+   * `--force`, an error, a shape this package does not know) or a started event. */
+  readonly succeeded: boolean;
 }
 
 const PATH_KEYS = ["path", "file", "filePath", "file_path", "target_file", "command"] as const;
@@ -68,13 +85,16 @@ export function summarizeToolCall(event: ToolCall): ToolCallSummary {
       break;
     }
   }
-  return { name, target, writes: WRITE_KINDS.test(name) };
+  const result = (call as { result?: unknown })?.result;
+  const succeeded = typeof result === "object" && result !== null && "success" in result;
+  return { name, target, writes: WRITE_KINDS.test(name), succeeded };
 }
 
 /** Splits a byte stream into lines and parses each as a stream-json event. A line that is not JSON (a stray log
  * line) is counted and passed to `onNoise`, never dropped silently; a JSON line that fits no shape is `OtherEvent`. */
 export class NdjsonParser {
   private buffer = "";
+  private readonly decoder = new StringDecoder("utf8"); // a multi-byte character may be split across chunks
   readonly noise: string[] = [];
 
   constructor(
@@ -83,7 +103,7 @@ export class NdjsonParser {
   ) {}
 
   feed(chunk: Buffer | string): void {
-    this.buffer += chunk.toString();
+    this.buffer += typeof chunk === "string" ? chunk : this.decoder.write(chunk);
     let at = this.buffer.indexOf("\n");
     while (at >= 0) {
       this.line(this.buffer.slice(0, at));
@@ -94,6 +114,7 @@ export class NdjsonParser {
 
   /** The last line without a newline, if any (the terminal result may end without one). */
   end(): void {
+    this.buffer += this.decoder.end();
     if (this.buffer.trim() !== "") this.line(this.buffer);
     this.buffer = "";
   }

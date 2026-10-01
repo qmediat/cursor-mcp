@@ -18,8 +18,13 @@ From the 2026-10-01 comparison with Cursor's own CLI, SDK and Cloud Agents API (
   message). A non-JSON line is kept as noise, never dropped silently.
 - **A structured result.** `cursor_agent` and `cursor_reply` publish an `outputSchema` and return
   `structuredContent`: `result`, `status`, `is_error`, `session_id`, `request_id`, `model` (what cursor-agent reported at
-  start), `duration_ms`, `tool_calls`, `files_changed` (write/edit/delete targets, each once) and `stderr`; the text keeps
-  the answer first, then a metadata line and the files changed (`src/run-report.ts`, shared by both tools).
+  start), `duration_ms`, `tool_calls`, `files_changed` (file-tool write/edit/delete calls that reported success, each
+  once — a shell command's writes are not inspected), `files_proposed` (such calls without success: proposed without
+  `--force`, refused, failed), `noise_lines` (stdout lines that were not events) and `stderr`; the text keeps the answer
+  first, then a metadata line, the files changed and the files proposed (`src/run-report.ts`, shared by both tools).
+  Without a `result` event the last assistant message is the answer, the status is `no-result-event` and the run is
+  an error — the raw transcript is never the answer. A result with `null` fields, a multi-byte character split across
+  chunks, an observer that throws or a client that stopped listening never fail the run or the server.
 - The `cloud` parameter is gone: it passed `-c`, which Cursor's parameter reference does not list and whose interactive
   meaning (the composer picker) cannot run headless. A caller still sending it is not an error; the flag is simply not
   passed. Cloud agents are a separate API (see the comparison).

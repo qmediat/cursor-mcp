@@ -56,7 +56,7 @@ export async function handleCursorAgent(args: CursorAgentArgs, extra?: ToolExtra
     ...(extra?.signal ? { signal: extra.signal } : {}),
     onEvent: (event) => observer.on(event),
   });
-  const report = buildReport(result.parsed, result.stdout, result.stderr, observer);
+  const report = buildReport(result.parsed, result.stderr, observer);
   if (report.session_id) {
     sessionStore.record(report.session_id, args.prompt, { model: args.model ?? "auto", mode: args.mode ?? "agent" });
   }
