@@ -28,8 +28,11 @@ server unusable with current Cursor models and several promises the code did not
   the group is signalled and the call settles with what was read. The server's own SIGINT/SIGTERM/SIGHUP sends SIGTERM to
   every running group, SIGKILL after the grace, then ends; an exit it cannot delay sends SIGKILL — no agent outlives the
   server (cursor-agent runs detached, so the terminal's signals do not reach it on their own). A group counts as live
-  until its pipes closed or its SIGKILL was sent, not until its leader exited, and a pending SIGKILL is withdrawn once
-  the pipes closed so a reused group id is never signalled. The handlers are installed by the `cursor-mcp` entry point,
+  while any member answers a probe — checked when its pipes close and before every shutdown signal, never inferred
+  from the leader's exit or from the pipes alone (a helper may redirect its stdio) — and the SIGKILL deadline of a
+  cancellation is never withdrawn (a group with no member left at the deadline is simply forgotten). A second signal
+  during the shutdown grace ends the server at once, SIGKILL first. The concurrency slot counts cursor-agent processes:
+  it is released when the leader exits, and a helper the leader left behind has until the deadline. The handlers are installed by the `cursor-mcp` entry point,
   not by importing the executor. A child killed by something other than the request (an operator, the OOM
   killer) is an error, not an empty success. `cursor_models` and `cursor_health` are cancellable too, and a request
   cancelled while it waits for a concurrency slot leaves the queue at once instead of running later for nobody.
