@@ -3,7 +3,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { execute } from "../executor.js";
 import { headlessArgs } from "../cursor-argv.js";
 import { CursorModel, CursorSessionId, DEFAULT_TIMEOUT_MS } from "../types.js";
-import { formatDuration } from "../utils.js";
+import { buildReport, observerFor, toCallToolResult, type ToolExtra } from "../run-report.js";
 import { sessionStore } from "../session-store.js";
 
 export const cursorReplyInputSchema = z.object({
@@ -36,53 +36,18 @@ export function buildCursorReplyArgs(args: CursorReplyArgs, env: NodeJS.ProcessE
   return cliArgs;
 }
 
-export async function handleCursorReply(
-  args: CursorReplyArgs,
-  signal?: AbortSignal,
-): Promise<CallToolResult> {
+export async function handleCursorReply(args: CursorReplyArgs, extra?: ToolExtra): Promise<CallToolResult> {
   const cliArgs = buildCursorReplyArgs(args);
-
-  const timeoutMs = args.timeout_seconds
-    ? args.timeout_seconds * 1000
-    : DEFAULT_TIMEOUT_MS;
-
-  const result = await execute({ args: cliArgs, timeoutMs, ...(signal ? { signal } : {}) });
-
-  const lines: string[] = [];
-
-  if (result.parsed) {
-    const p = result.parsed;
-    lines.push(p.result ?? "(no output)");
-
-    const sessionId = p.session_id ?? args.session_id;
-    if (sessionId) {
-      sessionStore.record(sessionId, args.prompt, {
-        model: args.model,
-      });
-    }
-
-    const meta: string[] = [];
-    if (sessionId) meta.push(`Session: ${sessionId}`);
-    if (p.duration_ms) meta.push(`Duration: ${formatDuration(p.duration_ms)}`);
-
-    if (meta.length > 0) {
-      lines.push("");
-      lines.push(`---`);
-      lines.push(meta.join(" | "));
-    }
-  } else {
-    lines.push(result.stdout || "(no output)");
-  }
-
-  if (result.stderr) {
-    lines.push("");
-    lines.push(`[stderr] ${result.stderr}`);
-  }
-
-  const isError = result.parsed?.is_error === true || result.parsed?.subtype === "error";
-
-  return {
-    content: [{ type: "text" as const, text: lines.join("\n") }],
-    ...(isError ? { isError: true } : {}),
-  };
+  const timeoutMs = args.timeout_seconds ? args.timeout_seconds * 1000 : DEFAULT_TIMEOUT_MS;
+  const observer = observerFor(extra);
+  const result = await execute({
+    args: cliArgs,
+    timeoutMs,
+    ...(extra?.signal ? { signal: extra.signal } : {}),
+    onEvent: (event) => observer.on(event),
+  });
+  await observer.drain(); // every progress notification lands before the result
+  const report = buildReport(result.parsed, result.stderr, result.exitCode, observer, args.session_id);
+  if (report.session_id) sessionStore.record(report.session_id, args.prompt, { model: args.model });
+  return toCallToolResult(report);
 }

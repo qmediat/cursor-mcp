@@ -1,12 +1,26 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
+import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { cursorAgentInputSchema, handleCursorAgent } from "./tools/cursor-agent.js";
 import { cursorReplyInputSchema, handleCursorReply } from "./tools/cursor-reply.js";
 import { cursorModelsInputSchema, handleCursorModels } from "./tools/cursor-models.js";
 import { cursorSessionsInputSchema, handleCursorSessions } from "./tools/cursor-sessions.js";
 import { cursorHealthInputSchema, handleCursorHealth } from "./tools/cursor-health.js";
+import { runReportSchema, type ToolExtra } from "./run-report.js";
+
 import { CursorCliError, CursorTimeoutError, CursorNotFoundError, CursorAbortError } from "./errors.js";
 import { createRequire } from "node:module";
+
+/** The request's signal and, when the client asked for progress, its token and the notifier. */
+function toolExtra(extra: RequestHandlerExtra<ServerRequest, ServerNotification>): ToolExtra {
+  const progressToken = extra._meta?.progressToken;
+  return {
+    signal: extra.signal,
+    ...(progressToken !== undefined ? { progressToken } : {}),
+    sendNotification: extra.sendNotification,
+  };
+}
 
 // dist/server.js → ../package.json is the package root both in the repository and when installed from npm.
 const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
@@ -20,11 +34,13 @@ export function createServer(): McpServer {
   server.registerTool("cursor_agent", {
     description:
       "Execute a prompt using Cursor's AI agent with any model id the installed cursor-agent accepts (Composer, Claude, GPT, Gemini, Grok families on your plan; run cursor_models for ids). " +
-      "Modes: 'agent' (full capabilities — file edit, terminal, search), 'plan' (design-focused), 'ask' (read-only). " +
-      "The 'cloud' flag is experimental (see its description).",
+      "Modes: 'agent' (tools, terminal, search), 'plan' (design-focused), 'ask' (read-only). " +
+      "In headless mode cursor-agent only PROPOSES file changes unless the server operator set CURSOR_ALLOW_YOLO=true (then --force applies them; CURSOR_SANDBOX=enabled confines them). " +
+      "The result lists the files changed and the model used; a client that sends a progress token gets a progress notification per tool call.",
     inputSchema: cursorAgentInputSchema,
+    outputSchema: runReportSchema,
   }, async (args, extra) => {
-    try { return await handleCursorAgent(args, extra.signal); } catch (error) { return errorResponse(error); }
+    try { return await handleCursorAgent(args, toolExtra(extra)); } catch (error) { return errorResponse(error); }
   });
 
   server.registerTool("cursor_reply", {
@@ -32,8 +48,9 @@ export function createServer(): McpServer {
       "Continue an existing Cursor agent session. Send a follow-up message in the same conversation context. " +
       "Requires a session_id from a previous cursor_agent call.",
     inputSchema: cursorReplyInputSchema,
+    outputSchema: runReportSchema,
   }, async (args, extra) => {
-    try { return await handleCursorReply(args, extra.signal); } catch (error) { return errorResponse(error); }
+    try { return await handleCursorReply(args, toolExtra(extra)); } catch (error) { return errorResponse(error); }
   });
 
   server.registerTool("cursor_models", {

@@ -6,12 +6,12 @@
     "url": "https://github.com/qmediat/cursor-mcp",
     "source": "github"
   },
-  "version": "1.1.0",
+  "version": "1.2.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@qmediat.io/cursor-mcp",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "transport": {
         "type": "stdio"
       },
@@ -29,6 +29,13 @@
           "format": "string",
           "isSecret": false,
           "name": "CURSOR_ALLOW_YOLO"
+        },
+        {
+          "description": "`enabled` or `disabled`, passed to cursor-agent as --sandbox <mode>: confines what an auto-approved agent may run. Unset leaves the CLI's default; any other value ends the server at startup.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "CURSOR_SANDBOX"
         },
         {
           "name": "CURSOR_KILL_GRACE_MS",

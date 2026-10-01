@@ -97,18 +97,21 @@ or by hand (below). `npm install -g @qmediat.io/cursor-mcp` installs the `cursor
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `CURSOR_MAX_CONCURRENCY` | No | `3` | Maximum concurrent cursor-agent processes — an integer from 1 to 64; anything else is the default |
-| `CURSOR_ALLOW_YOLO` | No | `false` | `true` runs `cursor_agent` and `cursor_reply` with `--force` (auto-approve every tool call). **DANGEROUS** — only for trusted environments |
+| `CURSOR_ALLOW_YOLO` | No | `false` | `true` runs `cursor_agent` and `cursor_reply` with `--force` (auto-approve every tool call). Without it cursor-agent in headless mode only **proposes** file changes and applies none ([Cursor's headless docs](https://cursor.com/docs/cli/headless)). **DANGEROUS** — only for trusted environments, best with `CURSOR_SANDBOX=enabled` |
+| `CURSOR_SANDBOX` | No | the CLI's default | `enabled` or `disabled`, passed as `--sandbox <mode>`: the sandbox confines what an auto-approved agent may run; any other value ends the server at startup |
 | `CURSOR_KILL_GRACE_MS` | No | `5000` | After SIGTERM (timeout or cancellation), a child still alive this long is sent SIGKILL — an integer of milliseconds from 1 to 2147483647 (what a timer can wait); anything else is the default |
 
 ## Available Tools
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
-| `cursor_agent` | Execute a prompt using Cursor's AI agent | `prompt` (≤ 100 000 chars), `model`, `mode`, `workspace`, `cloud` (experimental), `timeout_seconds` (10–3600, default 600) |
+| `cursor_agent` | Execute a prompt using Cursor's AI agent | `prompt` (≤ 100 000 chars), `model`, `mode`, `workspace`, `timeout_seconds` (10–3600, default 600) |
 | `cursor_reply` | Continue an existing agent session | `prompt`, `session_id`, `model`, `timeout_seconds` |
 | `cursor_models` | List the model ids the installed CLI offers | — |
 | `cursor_sessions` | List agent sessions (this server instance) | — |
 | `cursor_health` | Check installation, auth, and config | — |
+
+Both agent tools run cursor-agent with `--output-format stream-json`: the answer, its `session_id`, `request_id`, the model cursor-agent reported, the duration, the number of tool calls and the files changed (write/edit targets, each once) come back as text and as `structuredContent` (`outputSchema` published). A client that sends a progress token on the request gets one `notifications/progress` per event (model, tool call, assistant message), so a ten-minute run never looks dead.
 
 ### Models
 
@@ -118,7 +121,7 @@ or by hand (below). `npm install -g @qmediat.io/cursor-mcp` installs the `cursor
 
 | Mode | Description |
 |------|-------------|
-| `agent` | Full capabilities — file edit, terminal, search (default) |
+| `agent` | Tools, terminal, search (default). In headless mode file changes are **proposed in the answer, not applied**, unless the operator set `CURSOR_ALLOW_YOLO=true` (`--force`) |
 | `plan` | Read-only planning — analyses and proposes a plan, makes no edits (in headless mode a clarifying question cannot be answered) |
 | `ask` | Read-only exploration — no file modifications |
 
@@ -141,7 +144,7 @@ The built-in semaphore (default: 3) queues excess requests to prevent rate limit
 - **No credentials stored** — cursor-agent handles its own OAuth
 - **No HTTP requests** — pure CLI wrapper, no network access beyond cursor-agent
 - **Process cleanup** — the client's cancellation (the MCP request signal) and the timeout kill the child and the helpers in its process group (POSIX; on Windows there is no group and only cursor-agent itself is signalled): SIGTERM, then SIGKILL after `CURSOR_KILL_GRACE_MS` (5 s); the call and its concurrency slot are released only once the child itself has exited; the server's own shutdown ends every running group the same way, so no agent outlives it
-- **Auto-approve gated** — `--force` requires explicit `CURSOR_ALLOW_YOLO=true` env var, never controllable by LLMs; it applies to `cursor_agent` and `cursor_reply` alike
+- **Auto-approve gated** — `--force` requires explicit `CURSOR_ALLOW_YOLO=true` env var, never controllable by LLMs; without it the agent only proposes changes; `CURSOR_SANDBOX=enabled` confines an auto-approved agent; it applies to `cursor_agent` and `cursor_reply` alike
 - **Trusted workspace** — every call runs `cursor-agent --trust` on the given `workspace` (the server's cwd by default), so the agent is not prompted about the directory: point `workspace` only at directories you intend it to operate in
 - **Concurrency limited** — semaphore prevents resource exhaustion
 
