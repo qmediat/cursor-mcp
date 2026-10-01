@@ -24,7 +24,8 @@ The `--force` flag makes cursor-agent auto-approve **all** tool calls (file writ
 
 - **Never exposed as a tool parameter** — LLMs cannot request this
 - **Gated behind `CURSOR_ALLOW_YOLO=true` env var** — only the server operator can enable it; it applies to `cursor_agent` and `cursor_reply` alike
-- **Default: disabled** — cursor-agent runs in safe mode
+- **Default: disabled** — cursor-agent runs in safe mode: in headless mode it then only PROPOSES file changes in its answer and applies none ([cursor.com/docs/cli/headless](https://cursor.com/docs/cli/headless))
+- **`CURSOR_SANDBOX=enabled`** passes `--sandbox enabled`, Cursor's confinement of what an auto-approved agent may run; `disabled` turns it off; unset leaves the CLI's default
 
 ### Authentication
 

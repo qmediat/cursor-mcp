@@ -311,7 +311,7 @@ test("a cancelled call whose group died at once leaves nothing behind: the serve
 test("the tool handler passes the request signal on: handleCursorAgent is cancelled through it", async () => {
   await fresh();
   const ac = new AbortController();
-  const call = handleCursorAgent({ prompt: "x" }, ac.signal);
+  const call = handleCursorAgent({ prompt: "x" }, { signal: ac.signal });
   await childPid();
   ac.abort();
   const result = await call.catch((e) => e);

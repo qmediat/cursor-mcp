@@ -6,13 +6,14 @@ import { buildCursorAgentArgs, cursorAgentInputSchema } from "../dist/tools/curs
 import { buildCursorReplyArgs, cursorReplyInputSchema } from "../dist/tools/cursor-reply.js";
 import { cleanModelsOutput } from "../dist/tools/cursor-models.js";
 import { parseKillGraceMs, parseMaxConcurrency } from "../dist/executor.js";
+import { sandboxArgs } from "../dist/cursor-argv.js";
 
 test("any model id cursor-agent could accept passes the schema and reaches --model; `auto` sends no --model", () => {
   for (const id of ["composer-2.5", "cursor/claude-opus-5.5", "grok-4.7", "gpt-5.6-sol"]) {
     assert.equal(cursorAgentInputSchema.safeParse({ prompt: "x", model: id }).success, true, id);
     assert.deepEqual(buildCursorAgentArgs({ prompt: "x", model: id }, {}).slice(-4), ["--model", id, "--", "x"]);
   }
-  assert.deepEqual(buildCursorAgentArgs({ prompt: "x", model: "auto" }, {}), ["-p", "--output-format", "json", "--trust", "--", "x"]);
+  assert.deepEqual(buildCursorAgentArgs({ prompt: "x", model: "auto" }, {}), ["-p", "--output-format", "stream-json", "--trust", "--", "x"]);
   for (const bad of ["", " ", "a b", "-x", "../etc"]) {
     assert.equal(cursorAgentInputSchema.safeParse({ prompt: "x", model: bad }).success, false, JSON.stringify(bad));
   }
@@ -29,10 +30,10 @@ test("--force is added only when the operator set CURSOR_ALLOW_YOLO=true, for cu
 
 test("cursor_reply resumes the session and keeps --trust, mode flags and the prompt last", () => {
   assert.deepEqual(buildCursorReplyArgs({ prompt: "y", session_id: "s1", model: "composer-2.5" }, {}), [
-    "-p", "--output-format", "json", "--trust", "--resume", "s1", "--model", "composer-2.5", "--", "y",
+    "-p", "--output-format", "stream-json", "--trust", "--resume", "s1", "--model", "composer-2.5", "--", "y",
   ]);
-  assert.deepEqual(buildCursorAgentArgs({ prompt: "x", mode: "plan", workspace: "/w", cloud: true }, {}), [
-    "-p", "--output-format", "json", "--trust", "--mode", "plan", "--workspace", "/w", "-c", "--", "x",
+  assert.deepEqual(buildCursorAgentArgs({ prompt: "x", mode: "plan", workspace: "/w" }, {}), [
+    "-p", "--output-format", "stream-json", "--trust", "--mode", "plan", "--workspace", "/w", "--", "x",
   ]);
 });
 
@@ -87,4 +88,15 @@ test("CURSOR_KILL_GRACE_MS above what a timer can wait, and CURSOR_MAX_CONCURREN
   assert.equal(parseKillGraceMs("300"), 300);
   assert.equal(parseMaxConcurrency("64"), 64);
   assert.equal(parseMaxConcurrency("1000000"), 3);
+});
+
+test("CURSOR_SANDBOX: enabled or disabled becomes --sandbox, unset adds nothing, anything else is refused by name", () => {
+  assert.deepEqual(sandboxArgs({}), []);
+  assert.deepEqual(sandboxArgs({ CURSOR_SANDBOX: "enabled" }), ["--sandbox", "enabled"]);
+  assert.deepEqual(buildCursorAgentArgs({ prompt: "x" }, { CURSOR_SANDBOX: "disabled", CURSOR_ALLOW_YOLO: "true" }), [
+    "-p", "--output-format", "stream-json", "--trust", "--sandbox", "disabled", "--force", "--", "x",
+  ]);
+  assert.throws(() => sandboxArgs({ CURSOR_SANDBOX: "yes" }), /CURSOR_SANDBOX must be/);
+  assert.equal(cursorAgentInputSchema.safeParse({ prompt: "x", cloud: true }).success, true, "an unknown key is ignored by the schema, not an option any more");
+  assert.equal(buildCursorAgentArgs({ prompt: "x", cloud: true }, {}).includes("-c"), false);
 });

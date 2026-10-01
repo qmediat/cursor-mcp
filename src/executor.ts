@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { NdjsonParser, type StreamEvent } from "./stream.js";
 import { which } from "./utils.js";
 import { CursorCliError, CursorTimeoutError, CursorNotFoundError, CursorAbortError } from "./errors.js";
 import { CursorResultSchema, DEFAULT_TIMEOUT_MS, CURSOR_BINARY, DEFAULT_KILL_GRACE_MS, DEFAULT_MAX_CONCURRENCY, MAX_TIMER_MS, MAX_CONCURRENCY_LIMIT } from "./types.js";
@@ -19,6 +20,8 @@ export interface ExecuteOptions {
   timeoutMs?: number;
   parseJson?: boolean;
   signal?: AbortSignal;
+  /** With `--output-format stream-json`: every event as it arrives; the terminal `result` event becomes `parsed`. */
+  onEvent?: (event: StreamEvent) => void | Promise<void>;
 }
 
 export interface ExecuteResult {
@@ -181,7 +184,7 @@ export async function execute(options: ExecuteOptions): Promise<ExecuteResult> {
 }
 
 async function executeInternal(options: ExecuteOptions): Promise<ExecuteResult> {
-  const { args, timeoutMs = DEFAULT_TIMEOUT_MS, parseJson = true, signal } = options;
+  const { args, timeoutMs = DEFAULT_TIMEOUT_MS, parseJson = true, signal, onEvent } = options;
   const binary = await resolveBinary();
 
   // Combine MCP cancellation signal with hard timeout using AbortSignal.any() (Node 20+)
@@ -239,7 +242,19 @@ async function executeInternal(options: ExecuteOptions): Promise<ExecuteResult> 
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
 
-    child.stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
+    // stream-json: each line is handed to the caller as it arrives; the last `result` event is the run's result
+    let streamResult: CursorResult | undefined;
+    const parser =
+      onEvent === undefined
+        ? undefined
+        : new NdjsonParser((event) => {
+            if (event.type === "result") streamResult = CursorResultSchema.parse(event);
+            void Promise.resolve(onEvent(event)).catch(() => undefined); // an observer's failure never fails the run
+          });
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdoutChunks.push(chunk);
+      parser?.feed(chunk);
+    });
     child.stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
 
     const finish = (error: Error | null, result?: ExecuteResult): void => {
@@ -276,7 +291,8 @@ async function executeInternal(options: ExecuteOptions): Promise<ExecuteResult> 
         finish(new CursorCliError(exitCode, stderr, `cursor-agent exited with code ${exitCode}`));
         return;
       }
-      finish(null, parseResult(stdout, stderr, exitCode, parseJson));
+      parser?.end();
+      finish(null, parseResult(stdout, stderr, exitCode, parseJson, streamResult));
     };
 
     // `close` (the pipes closed) normally follows `exit` at once. When it does not, a helper that inherited the
@@ -309,8 +325,18 @@ async function executeInternal(options: ExecuteOptions): Promise<ExecuteResult> 
   });
 }
 
-function parseResult(stdout: string, stderr: string, exitCode: number, parseJson: boolean): ExecuteResult {
+function parseResult(
+  stdout: string,
+  stderr: string,
+  exitCode: number,
+  parseJson: boolean,
+  streamResult: CursorResult | undefined,
+): ExecuteResult {
   const result: ExecuteResult = { stdout, stderr, exitCode };
+  if (streamResult !== undefined) {
+    result.parsed = streamResult;
+    return result;
+  }
   if (parseJson && stdout) {
     try {
       const raw = JSON.parse(stdout);

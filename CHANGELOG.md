@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-01
+
+From the 2026-10-01 comparison with Cursor's own CLI, SDK and Cloud Agents API (`docs/COMPETITION-2026-10-01.md`).
+
+### Changed
+
+- **The truth about headless edits.** Cursor's headless docs: without `--force`, changes are only proposed, not
+  applied. The README, the tool description and SECURITY.md say so; the `agent` mode row no longer promises "file edit"
+  by default. `CURSOR_SANDBOX=enabled|disabled` (operator environment) passes `--sandbox <mode>` so an auto-approved
+  agent can be confined; any other value is refused by name at the first call.
+- **Streaming.** Both agent tools run `--output-format stream-json`. Every event is parsed as it arrives
+  (`src/stream.ts`): the terminal `result` is the run's result as before; a client that sent a progress token gets one
+  `notifications/progress` per event (the model at start, each completed tool call with its target, each assistant
+  message). A non-JSON line is kept as noise, never dropped silently.
+- **A structured result.** `cursor_agent` and `cursor_reply` publish an `outputSchema` and return
+  `structuredContent`: `result`, `status`, `is_error`, `session_id`, `request_id`, `model` (what cursor-agent reported at
+  start), `duration_ms`, `tool_calls`, `files_changed` (write/edit/delete targets, each once) and `stderr`; the text keeps
+  the answer first, then a metadata line and the files changed (`src/run-report.ts`, shared by both tools).
+- The `cloud` parameter is gone: it passed `-c`, which Cursor's parameter reference does not list and whose interactive
+  meaning (the composer picker) cannot run headless. A caller still sending it is not an error; the flag is simply not
+  passed. Cloud agents are a separate API (see the comparison).
+
+### Tests
+
+- `test/stream.test.mjs`: a fake cursor-agent emits the documented stream-json events; the report, the files changed,
+  the progress notifications and the parser's handling of a non-JSON line and of a result without a trailing newline.
+
 ## [1.1.0] - 2026-10-01
 
 An audit of the npm page (2026-10-01, every claim checked against the code and against Cursor's documentation) found the
