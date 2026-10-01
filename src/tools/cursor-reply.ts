@@ -1,7 +1,7 @@
 import { z } from "zod/v4";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { execute } from "../executor.js";
-import { CursorModel, DEFAULT_TIMEOUT_MS } from "../types.js";
+import { CursorModel, CursorSessionId, DEFAULT_TIMEOUT_MS } from "../types.js";
 import { formatDuration } from "../utils.js";
 import { sessionStore } from "../session-store.js";
 
@@ -9,7 +9,7 @@ export const cursorReplyInputSchema = z.object({
   prompt: z.string().min(1).max(100_000).describe(
     "Follow-up message to send in an existing Cursor agent session.",
   ),
-  session_id: z.string().min(1).describe(
+  session_id: CursorSessionId.describe(
     "Session ID from a previous cursor-agent call. Use cursor-sessions to list available sessions.",
   ),
   model: CursorModel.optional().describe(
@@ -40,7 +40,7 @@ export function buildCursorReplyArgs(args: CursorReplyArgs, env: NodeJS.ProcessE
     cliArgs.push("--model", args.model);
   }
 
-  cliArgs.push(args.prompt);
+  cliArgs.push("--", args.prompt); // the prompt is an operand, never an option, whatever it starts with
   return cliArgs;
 }
 

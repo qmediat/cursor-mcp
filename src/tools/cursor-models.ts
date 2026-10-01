@@ -8,7 +8,12 @@ const ANSI = /\x1B\[[0-9;?]*[ -\/]*[@-~]/g;
 
 /** The CLI's `models` output as text: ANSI stripped; empty when it lists nothing ("No models available …"). */
 export function cleanModelsOutput(stdout: string): string {
-  const text = stdout.replace(ANSI, "").trim();
+  const text = stdout
+    .replace(ANSI, "")
+    .split("\n")
+    .filter((line) => !/^\s*Loading models/i.test(line)) // the CLI's progress line, redrawn with cursor codes
+    .join("\n")
+    .trim();
   if (text === "" || /no models available/i.test(text)) return "";
   return text;
 }

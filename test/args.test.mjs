@@ -3,16 +3,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { buildCursorAgentArgs, cursorAgentInputSchema } from "../dist/tools/cursor-agent.js";
-import { buildCursorReplyArgs } from "../dist/tools/cursor-reply.js";
+import { buildCursorReplyArgs, cursorReplyInputSchema } from "../dist/tools/cursor-reply.js";
 import { cleanModelsOutput } from "../dist/tools/cursor-models.js";
 import { parseMaxConcurrency } from "../dist/executor.js";
 
 test("any model id cursor-agent could accept passes the schema and reaches --model; `auto` sends no --model", () => {
   for (const id of ["composer-2.5", "cursor/claude-opus-5.5", "grok-4.7", "gpt-5.6-sol"]) {
     assert.equal(cursorAgentInputSchema.safeParse({ prompt: "x", model: id }).success, true, id);
-    assert.deepEqual(buildCursorAgentArgs({ prompt: "x", model: id }, {}).slice(-3), ["--model", id, "x"]);
+    assert.deepEqual(buildCursorAgentArgs({ prompt: "x", model: id }, {}).slice(-4), ["--model", id, "--", "x"]);
   }
-  assert.deepEqual(buildCursorAgentArgs({ prompt: "x", model: "auto" }, {}), ["-p", "--output-format", "json", "--trust", "x"]);
+  assert.deepEqual(buildCursorAgentArgs({ prompt: "x", model: "auto" }, {}), ["-p", "--output-format", "json", "--trust", "--", "x"]);
   for (const bad of ["", " ", "a b", "-x", "../etc"]) {
     assert.equal(cursorAgentInputSchema.safeParse({ prompt: "x", model: bad }).success, false, JSON.stringify(bad));
   }
@@ -29,10 +29,10 @@ test("--force is added only when the operator set CURSOR_ALLOW_YOLO=true, for cu
 
 test("cursor_reply resumes the session and keeps --trust, mode flags and the prompt last", () => {
   assert.deepEqual(buildCursorReplyArgs({ prompt: "y", session_id: "s1", model: "composer-2.5" }, {}), [
-    "-p", "--output-format", "json", "--trust", "--resume", "s1", "--model", "composer-2.5", "y",
+    "-p", "--output-format", "json", "--trust", "--resume", "s1", "--model", "composer-2.5", "--", "y",
   ]);
   assert.deepEqual(buildCursorAgentArgs({ prompt: "x", mode: "plan", workspace: "/w", cloud: true }, {}), [
-    "-p", "--output-format", "json", "--trust", "--mode", "plan", "--workspace", "/w", "-c", "x",
+    "-p", "--output-format", "json", "--trust", "--mode", "plan", "--workspace", "/w", "-c", "--", "x",
   ]);
 });
 
@@ -48,4 +48,25 @@ test("cursor_models: ANSI codes stripped, 'No models available' is an empty list
   assert.equal(cleanModelsOutput("\u001b[2K\u001b[1mLoading models…\u001b[0m\nNo models available for this account.\n"), "");
   assert.equal(cleanModelsOutput(""), "");
   assert.equal(cleanModelsOutput("\u001b[32mcomposer-2.5\u001b[0m\ngpt-5.6-sol\n"), "composer-2.5\ngpt-5.6-sol");
+});
+
+test("no argument injection: the prompt follows `--`, and a session id that looks like an option is refused", () => {
+  // `cursor-agent --resume [chatId]` takes an optional value and `-f` is --force: before 1.1.0 a session_id of "-f"
+  // became --force and a prompt "- fix the list" was an unknown option.
+  const agent = buildCursorAgentArgs({ prompt: "- fix the list item" }, {});
+  assert.equal(agent.at(-2), "--", "the prompt is the first operand after --");
+  assert.equal(agent.at(-1), "- fix the list item");
+  const reply = buildCursorReplyArgs({ prompt: "-f", session_id: "abc-123" }, {});
+  assert.deepEqual(reply.slice(-2), ["--", "-f"]);
+  assert.ok(!reply.slice(0, -1).includes("-f"));
+  for (const bad of ["-f", "--force", "", " ", "a b", "x;y"]) {
+    assert.equal(cursorReplyInputSchema.safeParse({ prompt: "x", session_id: bad }).success, false, JSON.stringify(bad));
+  }
+  assert.equal(cursorReplyInputSchema.safeParse({ prompt: "x", session_id: "0f3e2a1b-aaaa-4bbb-8ccc-123456789abc" }).success, true);
+});
+
+test("cursor_models drops the CLI's 'Loading models…' status line and keeps the list", () => {
+  const real = "\u001b[2K\u001b[GLoading models…\n\u001b[2K\u001b[1A\u001b[2K\u001b[Gauto - Auto\ncomposer-2.5 - Composer 2.5\n";
+  assert.equal(cleanModelsOutput(real), "auto - Auto\ncomposer-2.5 - Composer 2.5");
+  assert.equal(cleanModelsOutput("\u001b[2K\u001b[GLoading models…\n\u001b[2K\u001b[1A\u001b[2K\u001b[GNo models available for this account.\n"), "");
 });

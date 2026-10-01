@@ -16,7 +16,12 @@ server unusable with current Cursor models and several promises the code did not
   child still alive 5 s later is sent SIGKILL (the behaviour SECURITY.md described). `cursor_reply` applies the same
   `CURSOR_ALLOW_YOLO=true` → `--force` gate as `cursor_agent`, so an auto-approved session keeps applying its edits on
   follow-ups (before, a reply only proposed them). `CURSOR_MAX_CONCURRENCY` must be a positive integer; anything else is the
-  default 3 (a negative value made every call queue forever). `cursor_models` strips the CLI's ANSI codes and treats
+  default 3 (a negative value made every call queue forever). The prompt follows a `--` separator and `session_id` is
+  validated to one word: before, a `session_id` of `-f` was read by cursor-agent as `--force` (`--resume` takes an
+  optional value) and bypassed the `CURSOR_ALLOW_YOLO` gate, and a prompt starting with `-` was an unknown option.
+  A cancelled request settles only once the child is gone, so its concurrency slot is never reused while the old
+  process still runs (`CURSOR_KILL_GRACE_MS`, default 5000). `cursor_models` strips the CLI's ANSI codes and its
+  "Loading models…" progress line and treats
   "No models available for this account" as an empty list; the fallback text names no prices (they are on
   cursor.com/docs/models-and-pricing) and says how to list ids.
 
@@ -26,8 +31,10 @@ server unusable with current Cursor models and several promises the code did not
   instead of retired ids and prices, `agent login` (with `cursor-agent` as the alias the server resolves), the `cursor-mcp`
   command and a `claude mcp add` one-liner, every call runs with `--trust` on the given workspace, the `cloud` flag is
   experimental, "plan" is read-only planning, no "Business" plan, one response-time statement, absolute links.
-- Tests: `test/args.test.mjs` pins the argv of both tools, the open model contract, the concurrency parser and the models
-  cleaner; the smoke test asserts the model schema has no enum. Published JavaScript changes in this release.
+- Tests: `test/args.test.mjs` pins the argv of both tools (the `--` separator, the session-id contract), the open model
+  contract, the concurrency parser and the models cleaner on the CLI's real bytes; `test/cancel.test.mjs` runs a fake
+  `cursor-agent` that ignores SIGTERM and proves the cancellation reaches it, SIGKILL follows, and the slot is held
+  until then; the smoke test asserts the model schema has no enum. Published JavaScript changes in this release.
 - `package.json` names the repository as `git+https://…` — the form npm publishes, so a publish prints no auto-correction.
 
 ## [1.0.3] - 2026-09-29

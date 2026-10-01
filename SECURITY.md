@@ -9,8 +9,8 @@
 ### Process Isolation
 
 - Each tool call spawns a separate `cursor-agent` process with `stdio: ["ignore", "pipe", "pipe"]`
-- No shell interpolation — arguments are passed as an array to `spawn`, preventing injection attacks
-- Processes are killed on timeout or when the MCP client cancels the request: SIGTERM (the spawn `signal`), then SIGKILL after 5 s if the child is still alive
+- No shell interpolation — arguments are passed as an array to `spawn`; the prompt follows a `--` separator and `session_id` is validated to one word, so a value such as `-f` is never read as `cursor-agent`'s `--force`
+- Processes are killed on timeout or when the MCP client cancels the request: SIGTERM (the spawn `signal`), then SIGKILL after `CURSOR_KILL_GRACE_MS` (5 s) if the child is still alive; the request settles and its concurrency slot is freed only once the child is gone
 - Every call runs `cursor-agent --trust` on the given `workspace` (the server's cwd by default): the directory is trusted without a prompt, so the operator decides which workspaces the server may be pointed at
 
 ### Concurrency Control

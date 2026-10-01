@@ -98,6 +98,7 @@ or by hand (below). `npm install -g @qmediat.io/cursor-mcp` installs the `cursor
 |----------|----------|---------|-------------|
 | `CURSOR_MAX_CONCURRENCY` | No | `3` | Maximum concurrent cursor-agent processes — a positive integer; anything else is the default |
 | `CURSOR_ALLOW_YOLO` | No | `false` | `true` runs `cursor_agent` and `cursor_reply` with `--force` (auto-approve every tool call). **DANGEROUS** — only for trusted environments |
+| `CURSOR_KILL_GRACE_MS` | No | `5000` | After SIGTERM (timeout or cancellation), a child still alive this long is sent SIGKILL — a positive integer of milliseconds |
 
 ## Available Tools
 
@@ -136,10 +137,10 @@ The built-in semaphore (default: 3) queues excess requests to prevent rate limit
 
 ## Security
 
-- **No shell execution** — `child_process.spawn` with argument arrays, preventing injection
+- **No shell execution** — `child_process.spawn` with argument arrays; the prompt follows a `--` separator and the session id must be one word, so neither can read as a `cursor-agent` option (a prompt or session id of `-f` cannot turn into `--force`)
 - **No credentials stored** — cursor-agent handles its own OAuth
 - **No HTTP requests** — pure CLI wrapper, no network access beyond cursor-agent
-- **Process cleanup** — the client's cancellation (the MCP request signal) and the timeout kill the child: SIGTERM, then SIGKILL after 5 s
+- **Process cleanup** — the client's cancellation (the MCP request signal) and the timeout kill the child: SIGTERM, then SIGKILL after `CURSOR_KILL_GRACE_MS` (5 s); the call and its concurrency slot are released only once the child is gone
 - **Auto-approve gated** — `--force` requires explicit `CURSOR_ALLOW_YOLO=true` env var, never controllable by LLMs; it applies to `cursor_agent` and `cursor_reply` alike
 - **Trusted workspace** — every call runs `cursor-agent --trust` on the given `workspace` (the server's cwd by default), so the agent is not prompted about the directory: point `workspace` only at directories you intend it to operate in
 - **Concurrency limited** — semaphore prevents resource exhaustion

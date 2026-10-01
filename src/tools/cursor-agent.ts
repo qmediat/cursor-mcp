@@ -55,7 +55,7 @@ export function buildCursorAgentArgs(args: CursorAgentArgs, env: NodeJS.ProcessE
     cliArgs.push("-c");
   }
 
-  cliArgs.push(args.prompt);
+  cliArgs.push("--", args.prompt); // the prompt is an operand, never an option, whatever it starts with
   return cliArgs;
 }
 

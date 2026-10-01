@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { which } from "./utils.js";
 import { CursorCliError, CursorTimeoutError, CursorNotFoundError, CursorAbortError } from "./errors.js";
-import { CursorResultSchema, DEFAULT_TIMEOUT_MS, CURSOR_BINARY, KILL_GRACE_MS, DEFAULT_MAX_CONCURRENCY } from "./types.js";
+import { CursorResultSchema, DEFAULT_TIMEOUT_MS, CURSOR_BINARY, DEFAULT_KILL_GRACE_MS, DEFAULT_MAX_CONCURRENCY } from "./types.js";
 import type { CursorResult } from "./types.js";
 
 let binaryPath: string | null = null;
@@ -68,6 +68,13 @@ export function parseMaxConcurrency(raw: string | undefined): number {
 
 const semaphore = new Semaphore(parseMaxConcurrency(process.env.CURSOR_MAX_CONCURRENCY));
 
+/** CURSOR_KILL_GRACE_MS as a positive integer of milliseconds; anything else is the default. */
+export function parseKillGraceMs(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === "") return DEFAULT_KILL_GRACE_MS;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 1 ? n : DEFAULT_KILL_GRACE_MS;
+}
+
 export async function execute(options: ExecuteOptions): Promise<ExecuteResult> {
   const release = await semaphore.acquire();
   try {
@@ -102,7 +109,7 @@ async function executeInternal(options: ExecuteOptions): Promise<ExecuteResult> 
     const escalate = (): void => {
       killTimer = setTimeout(() => {
         if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-      }, KILL_GRACE_MS);
+      }, parseKillGraceMs(process.env.CURSOR_KILL_GRACE_MS));
     };
     combinedSignal.addEventListener("abort", escalate, { once: true });
 
@@ -119,14 +126,14 @@ async function executeInternal(options: ExecuteOptions): Promise<ExecuteResult> 
       else resolve(result!);
     };
 
+    // An abort is settled on `close`, not on the AbortError: the promise (and the semaphore slot behind it) is
+    // released only once the child is gone — after SIGTERM, or SIGKILL when it ignored SIGTERM.
+    let abortError: Error | null = null;
+
     child.on("error", (error) => {
       if (error.name === "AbortError") {
         // Distinguish timeout from MCP client cancellation
-        if (timeoutSignal.aborted) {
-          finish(new CursorTimeoutError(timeoutMs));
-        } else {
-          finish(new CursorAbortError());
-        }
+        abortError = timeoutSignal.aborted ? new CursorTimeoutError(timeoutMs) : new CursorAbortError();
       } else if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         finish(new CursorNotFoundError());
       } else {
@@ -137,6 +144,10 @@ async function executeInternal(options: ExecuteOptions): Promise<ExecuteResult> 
     child.on("close", (exitCode) => {
       if (killTimer !== undefined) clearTimeout(killTimer);
       combinedSignal.removeEventListener("abort", escalate);
+      if (abortError) {
+        finish(abortError);
+        return;
+      }
       const stdout = Buffer.concat(stdoutChunks).toString("utf-8").trim();
       const stderr = Buffer.concat(stderrChunks).toString("utf-8").trim();
 

@@ -9,6 +9,9 @@ export const CursorModel = z.string().min(1).max(200).regex(/^[A-Za-z0-9][A-Za-z
 
 export const CursorMode = z.enum(["agent", "plan", "ask"]);
 
+/** A session id as cursor-agent prints it: one word, never something that could read as an option. */
+export const CursorSessionId = z.string().min(1).max(200).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/, "a session id");
+
 export const CursorResultSchema = z.object({
   type: z.string(),
   subtype: z.string().optional(),
@@ -25,7 +28,7 @@ export type CursorModelType = z.infer<typeof CursorModel>;
 export type CursorModeType = z.infer<typeof CursorMode>;
 
 export const DEFAULT_TIMEOUT_MS = 600_000; // 10 minutes — agent mode can be slow
-/** After SIGTERM (the spawn `signal` option), a child still alive this long is sent SIGKILL. */
-export const KILL_GRACE_MS = 5_000;
+/** After SIGTERM (the spawn `signal` option), a child still alive this long is sent SIGKILL (CURSOR_KILL_GRACE_MS overrides). */
+export const DEFAULT_KILL_GRACE_MS = 5_000;
 export const DEFAULT_MAX_CONCURRENCY = 3;
 export const CURSOR_BINARY = "cursor-agent";
