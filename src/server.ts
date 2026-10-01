@@ -19,12 +19,12 @@ export function createServer(): McpServer {
 
   server.registerTool("cursor_agent", {
     description:
-      "Execute a prompt using Cursor's AI agent. Supports multiple models including Composer 2, Claude, GPT, Gemini, and Grok. " +
+      "Execute a prompt using Cursor's AI agent with any model id the installed cursor-agent accepts (Composer, Claude, GPT, Gemini, Grok families on your plan; run cursor_models for ids). " +
       "Modes: 'agent' (full capabilities — file edit, terminal, search), 'plan' (design-focused), 'ask' (read-only). " +
-      "Optionally run as a cloud agent for background execution.",
+      "The 'cloud' flag is experimental (see its description).",
     inputSchema: cursorAgentInputSchema,
-  }, async (args) => {
-    try { return await handleCursorAgent(args); } catch (error) { return errorResponse(error); }
+  }, async (args, extra) => {
+    try { return await handleCursorAgent(args, extra.signal); } catch (error) { return errorResponse(error); }
   });
 
   server.registerTool("cursor_reply", {
@@ -32,17 +32,17 @@ export function createServer(): McpServer {
       "Continue an existing Cursor agent session. Send a follow-up message in the same conversation context. " +
       "Requires a session_id from a previous cursor_agent call.",
     inputSchema: cursorReplyInputSchema,
-  }, async (args) => {
-    try { return await handleCursorReply(args); } catch (error) { return errorResponse(error); }
+  }, async (args, extra) => {
+    try { return await handleCursorReply(args, extra.signal); } catch (error) { return errorResponse(error); }
   });
 
   server.registerTool("cursor_models", {
     description:
-      "List all available AI models in Cursor. Shows model names, descriptions, and pricing. " +
-      "Use model names with cursor_agent's 'model' parameter.",
+      "List the model ids the installed cursor-agent offers (its `models` command), or a known list when it offers none. " +
+      "Pricing is on cursor.com/docs/models-and-pricing. Use an id with cursor_agent's 'model' parameter.",
     inputSchema: cursorModelsInputSchema,
-  }, async () => {
-    try { return await handleCursorModels(); } catch (error) { return errorResponse(error); }
+  }, async (_args, extra) => {
+    try { return await handleCursorModels(extra.signal); } catch (error) { return errorResponse(error); }
   });
 
   server.registerTool("cursor_sessions", {
@@ -59,8 +59,8 @@ export function createServer(): McpServer {
       "Check Cursor CLI installation, authentication, and server configuration. " +
       "Run this first to verify everything is set up correctly.",
     inputSchema: cursorHealthInputSchema,
-  }, async () => {
-    try { return await handleCursorHealth(); } catch (error) { return errorResponse(error); }
+  }, async (_args, extra) => {
+    try { return await handleCursorHealth(extra.signal); } catch (error) { return errorResponse(error); }
   });
 
   return server;

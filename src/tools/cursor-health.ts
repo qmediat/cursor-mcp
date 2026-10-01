@@ -1,12 +1,13 @@
 import { z } from "zod/v4";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { execute } from "../executor.js";
+import { CursorAbortError } from "../errors.js";
+import { execute, parseMaxConcurrency } from "../executor.js";
 import { which } from "../utils.js";
 import { CURSOR_BINARY } from "../types.js";
 
 export const cursorHealthInputSchema = z.object({});
 
-export async function handleCursorHealth(): Promise<CallToolResult> {
+export async function handleCursorHealth(signal?: AbortSignal): Promise<CallToolResult> {
   const checks: string[] = [];
   let healthy = true;
 
@@ -26,9 +27,11 @@ export async function handleCursorHealth(): Promise<CallToolResult> {
         args: ["--version"],
         timeoutMs: 10_000,
         parseJson: false,
+        ...(signal ? { signal } : {}),
       });
       checks.push(`[OK] Version: ${result.stdout}`);
-    } catch {
+    } catch (error) {
+      if (error instanceof CursorAbortError) throw error; // a cancelled health check is not an unhealthy CLI
       checks.push("[FAIL] Could not get version");
       healthy = false;
     }
@@ -41,21 +44,23 @@ export async function handleCursorHealth(): Promise<CallToolResult> {
         args: ["status"],
         timeoutMs: 15_000,
         parseJson: false,
+        ...(signal ? { signal } : {}),
       });
       if (result.stdout.toLowerCase().includes("not logged in") ||
           result.stdout.toLowerCase().includes("not authenticated")) {
-        checks.push("[FAIL] Not authenticated. Run: cursor-agent login");
+        checks.push("[FAIL] Not authenticated. Run: agent login");
         healthy = false;
       } else {
         checks.push(`[OK] Auth: ${result.stdout.split("\n")[0]}`);
       }
     } catch (error) {
+      if (error instanceof CursorAbortError) throw error;
       checks.push(`[WARN] Could not check auth status: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
   // Check 4: Concurrency config
-  const maxConcurrency = Number(process.env.CURSOR_MAX_CONCURRENCY) || 3;
+  const maxConcurrency = parseMaxConcurrency(process.env.CURSOR_MAX_CONCURRENCY);
   checks.push(`[INFO] Max concurrency: ${maxConcurrency} (CURSOR_MAX_CONCURRENCY)`);
 
   // Check 5: Yolo mode

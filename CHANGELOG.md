@@ -2,8 +2,63 @@
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-01
+
+An audit of the npm page (2026-10-01, every claim checked against the code and against Cursor's documentation) found the
+server unusable with current Cursor models and several promises the code did not keep. Fixed:
+
+### Fixed
+
+- `model` is any id cursor-agent accepts (passed through to `--model`), no longer a closed list of ids from April 2026 that
+  rejected every current model (Composer 2.5, Claude Opus 5.5, Grok 4.7 …) before the CLI saw it. `auto` still lets Cursor
+  choose. A client's cancellation now reaches the child process: the SDK's request signal cancels the call, so a
+  disconnected or cancelled request kills cursor-agent instead of leaving it running on a semaphore slot. cursor-agent
+  runs in its own process group (POSIX) and the cancellation signals the group, so a helper it spawned stops too and
+  cannot keep editing after the request was reported aborted; a signal already aborted when the call starts is honoured
+  the same way. After SIGTERM a child still alive 5 s later is sent SIGKILL (the behaviour SECURITY.md described). `cursor_reply` applies the same
+  `CURSOR_ALLOW_YOLO=true` → `--force` gate as `cursor_agent`, so an auto-approved session keeps applying its edits on
+  follow-ups (before, a reply only proposed them). `CURSOR_MAX_CONCURRENCY` must be a positive integer; anything else is the
+  default 3 (a negative value made every call queue forever). The prompt follows a `--` separator and `session_id` is
+  validated to one word: before, a `session_id` of `-f` was read by cursor-agent as `--force` (`--resume` takes an
+  optional value) and bypassed the `CURSOR_ALLOW_YOLO` gate, and a prompt starting with `-` was an unknown option.
+  A cancelled request settles only once the child itself has exited (not once its pipes close: a helper still holding
+  them cannot keep the request alive), so its concurrency slot is never reused while the old process still runs
+  (`CURSOR_KILL_GRACE_MS`, default 5000); the SIGKILL deadline holds whatever the leader did, so a helper that ignores
+  SIGTERM dies with it. A leader that exits while a helper holds the pipes no longer hangs the call: after the same grace
+  the group is signalled and the call settles with what was read. The server's own SIGINT/SIGTERM/SIGHUP sends SIGTERM to
+  every running group, SIGKILL after the grace, then ends; an exit it cannot delay sends SIGKILL — no agent outlives the
+  server (cursor-agent runs detached, so the terminal's signals do not reach it on their own). A group counts as live
+  while any member answers a probe — checked when its pipes close and before every shutdown signal, never inferred
+  from the leader's exit or from the pipes alone (a helper may redirect its stdio) — and the SIGKILL deadline of a
+  cancellation is withdrawn only when a probe finds no member left (nothing to kill, and a reused group id is never
+  signalled; the group is probed again at the deadline). A group a finished call left behind is forgotten as soon as a
+  probe finds it empty (at every spawn and every shutdown signal); the shutdown ends as soon as nothing is live, never a
+  full grace for nobody. On Windows there is no process group: only cursor-agent itself is signalled. A second signal
+  during the shutdown grace ends the server at once, SIGKILL first. The concurrency slot counts cursor-agent processes:
+  it is released when the leader exits, and a helper the leader left behind has until the deadline. The handlers are installed by the `cursor-mcp` entry point,
+  not by importing the executor. A child killed by something other than the request (an operator, the OOM
+  killer) is an error, not an empty success. `cursor_models` and `cursor_health` are cancellable too, and a request
+  cancelled while it waits for a concurrency slot leaves the queue at once instead of running later for nobody.
+  `workspace` is validated like `session_id`: a value that reads as an option is refused. `CURSOR_KILL_GRACE_MS` above
+  2147483647 (a timer cannot wait longer; Node fired it after 1 ms) and `CURSOR_MAX_CONCURRENCY` above 64 are the
+  defaults, both read once at start-up. When the CLI's `models` command fails, the fallback list says why. `cursor_models` strips the CLI's ANSI codes and its
+  "Loading models…" progress line and treats
+  "No models available for this account" as an empty list; the fallback text names no prices (they are on
+  cursor.com/docs/models-and-pricing) and says how to list ids.
+
 ### Changed
 
+- README, SECURITY.md, the tool descriptions, `package.json` and `server.json` say what the code does: model families
+  instead of retired ids and prices, `agent login` (with `cursor-agent` as the alias the server resolves), the `cursor-mcp`
+  command and a `claude mcp add` one-liner, every call runs with `--trust` on the given workspace, the `cloud` flag is
+  experimental, "plan" is read-only planning, no "Business" plan, one response-time statement, absolute links.
+- Tests: `test/args.test.mjs` pins the argv of both tools (the `--` separator, the session-id contract), the open model
+  contract, the concurrency parser and the models cleaner on the CLI's real bytes; `test/cancel.test.mjs` runs a fake
+  `cursor-agent` that ignores SIGTERM and proves the cancellation reaches it, SIGKILL follows, and the slot is held
+  until then, that a signal aborted before the call still ends the child, and that a helper holding the pipes neither
+  survives the cancellation nor keeps the request alive, that a leader exiting under a pipe-holding helper still settles
+  and the helper is killed, that a SIGTERM-ignoring helper is SIGKILLed at the deadline, and that the server's SIGTERM ends
+  every running group; the smoke test asserts the model schema has no enum. Published JavaScript changes in this release.
 - `package.json` names the repository as `git+https://…` — the form npm publishes, so a publish prints no auto-correction.
 
 ## [1.0.3] - 2026-09-29

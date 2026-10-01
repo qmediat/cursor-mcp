@@ -95,6 +95,9 @@ test("the server completes the MCP handshake, advertises the package version and
       false,
       "the auto-approve flag is never exposed as a tool parameter (SECURITY.md)",
     );
+    const model = agent.inputSchema.properties.model;
+    assert.equal(model.type, "string", "model is a free id");
+    assert.equal(Object.hasOwn(model, "enum"), false, "no closed model list: every id cursor-agent accepts passes (1.1.0)");
   } finally {
     await server.stop();
   }
