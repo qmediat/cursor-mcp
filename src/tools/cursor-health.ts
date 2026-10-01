@@ -54,6 +54,7 @@ export async function handleCursorHealth(signal?: AbortSignal): Promise<CallTool
         checks.push(`[OK] Auth: ${result.stdout.split("\n")[0]}`);
       }
     } catch (error) {
+      if (error instanceof CursorAbortError) throw error;
       checks.push(`[WARN] Could not check auth status: ${error instanceof Error ? error.message : String(error)}`);
     }
   }

@@ -27,7 +27,10 @@ server unusable with current Cursor models and several promises the code did not
   SIGTERM dies with it. A leader that exits while a helper holds the pipes no longer hangs the call: after the same grace
   the group is signalled and the call settles with what was read. The server's own SIGINT/SIGTERM/SIGHUP sends SIGTERM to
   every running group, SIGKILL after the grace, then ends; an exit it cannot delay sends SIGKILL — no agent outlives the
-  server (cursor-agent runs detached, so the terminal's signals do not reach it on their own). A child killed by something other than the request (an operator, the OOM
+  server (cursor-agent runs detached, so the terminal's signals do not reach it on their own). A group counts as live
+  until its pipes closed or its SIGKILL was sent, not until its leader exited, and a pending SIGKILL is withdrawn once
+  the pipes closed so a reused group id is never signalled. The handlers are installed by the `cursor-mcp` entry point,
+  not by importing the executor. A child killed by something other than the request (an operator, the OOM
   killer) is an error, not an empty success. `cursor_models` and `cursor_health` are cancellable too, and a request
   cancelled while it waits for a concurrency slot leaves the queue at once instead of running later for nobody.
   `workspace` is validated like `session_id`: a value that reads as an option is refused. `CURSOR_KILL_GRACE_MS` above

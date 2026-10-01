@@ -187,7 +187,8 @@ test("the server's own SIGTERM ends every running cursor-agent group", async () 
   await fresh();
   const { spawn } = await import("node:child_process");
   const script = `
-    const { execute } = await import(${JSON.stringify(new URL("../dist/executor.js", import.meta.url).href)});
+    const { execute, installShutdownHandlers } = await import(${JSON.stringify(new URL("../dist/executor.js", import.meta.url).href)});
+    installShutdownHandlers();
     execute({ args: ["-p", "x"], timeoutMs: 30_000 }).catch(() => {});
     setTimeout(() => {}, 60_000);
   `;
@@ -203,6 +204,30 @@ test("the server's own SIGTERM ends every running cursor-agent group", async () 
   await sleep(200);
   assert.ok(!alive(pid), "the agent is gone with the server");
   assert.ok(!alive(helperPid), "its helper too");
+});
+
+test("the server's shutdown reaches a helper whose leader already exited (the group outlives its leader)", async () => {
+  await fresh();
+  const { spawn } = await import("node:child_process");
+  const script = `
+    const { execute, installShutdownHandlers } = await import(${JSON.stringify(new URL("../dist/executor.js", import.meta.url).href)});
+    installShutdownHandlers();
+    execute({ args: ["-p", "x"], timeoutMs: 30_000, parseJson: false }).catch(() => {});
+    setTimeout(() => {}, 60_000);
+  `;
+  const server = spawn(process.execPath, ["--input-type=module", "-e", script], {
+    stdio: ["ignore", "ignore", "inherit"],
+    env: { ...process.env, FAKE_GRANDCHILD: "1", FAKE_STUBBORN_HELPER: "1", FAKE_EXITS_AT_ONCE: "1", CURSOR_KILL_GRACE_MS: "2000" },
+  });
+  const pid = await childPid();
+  const helperPid = Number(await readFile(`${pidFile}.helper`, "utf8"));
+  await sleep(300); // the leader has exited, the helper's node is up and ignores SIGTERM
+  assert.ok(!alive(pid), "the leader exited");
+  assert.ok(alive(helperPid), "the helper lives on");
+  server.kill("SIGTERM");
+  await new Promise((r) => server.once("exit", r));
+  await sleep(200);
+  assert.ok(!alive(helperPid), "the helper was SIGKILLed by the server's shutdown");
 });
 
 test("the tool handler passes the request signal on: handleCursorAgent is cancelled through it", async () => {
