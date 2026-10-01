@@ -119,18 +119,22 @@ function signalChildGroup(child: ChildProcess, sig: NodeJS.Signals): void {
   }
 }
 
+/** Forgets every tracked group with no member left. */
+function pruneGroups(): void {
+  for (const child of live) if (!groupAlive(child)) live.delete(child);
+}
+
 /** Signals every tracked group that still has a member and forgets the rest. */
 function shutdownGroups(sig: NodeJS.Signals): void {
-  for (const child of live) {
-    if (groupAlive(child)) signalChildGroup(child, sig);
-    else live.delete(child);
-  }
+  pruneGroups();
+  for (const child of live) signalChildGroup(child, sig);
 }
 
 // A signal to the server: every group gets SIGTERM, SIGKILL after the grace period if any is still there, and the
 // server then ends by the signal's default action. A second signal during the grace ends it at once, SIGKILL first.
 // An exit the server cannot delay (stdin closed, an explicit exit) sends SIGKILL: no agent outlives the server.
 let shutdownInstalled = false;
+const SHUTDOWN_POLL_MS = 100;
 
 /** The server entry point installs this once; a host that only imports the executor (a test) keeps its own signals. */
 export function installShutdownHandlers(): void {
@@ -150,8 +154,18 @@ export function installShutdownHandlers(): void {
       }
       ending = true;
       shutdownGroups("SIGTERM");
-      if (live.size === 0) end();
-      else setTimeout(end, killGraceMs);
+      if (live.size === 0) {
+        end();
+        return;
+      }
+      const deadline = Date.now() + killGraceMs;
+      const poll = setInterval(() => {
+        pruneGroups();
+        if (live.size === 0 || Date.now() >= deadline) {
+          clearInterval(poll);
+          end();
+        }
+      }, SHUTDOWN_POLL_MS);
     });
   }
   process.on("exit", () => shutdownGroups("SIGKILL"));
@@ -187,6 +201,7 @@ async function executeInternal(options: ExecuteOptions): Promise<ExecuteResult> 
       env: { ...process.env },
       detached: process.platform !== "win32",
     });
+    pruneGroups();
     live.add(child);
 
     // The group may outlive its leader: the signal goes to the group while any member exists, never to the leader's
@@ -195,7 +210,8 @@ async function executeInternal(options: ExecuteOptions): Promise<ExecuteResult> 
 
     // A cancellation (the client's signal or the timeout) sends SIGTERM to the group; SIGKILL follows after the grace
     // period whatever the leader did meanwhile — a helper that ignores SIGTERM dies with it, whether or not it kept
-    // the pipes. The deadline is never withdrawn: at it, a group with no member left is simply forgotten. The promise
+    // the pipes. The deadline is withdrawn only when a probe finds no member left (then there is nothing to kill and
+    // a reused group id is never signalled); at the deadline the group is probed again before SIGKILL. The promise
     // (and the semaphore slot behind it — a count of cursor-agent processes, which the leader was) is released once
     // the leader is gone — on `exit`, not `close`; its helpers have until the deadline.
     let abortError: Error | null = null;
@@ -277,11 +293,16 @@ async function executeInternal(options: ExecuteOptions): Promise<ExecuteResult> 
     });
 
     child.on("close", (exitCode, signalCode) => {
-      // the pipes closed: a group with no member left is forgotten; one with a member (a helper that redirected its
-      // stdio) stays tracked for the shutdown and for a pending deadline
+      // the pipes closed: a group with no member left is forgotten and its deadline withdrawn; one with a member (a
+      // helper that redirected its stdio) stays tracked for the shutdown and for the pending deadline
       if (closeTimer !== undefined) clearTimeout(closeTimer);
-      if (!groupAlive(child)) live.delete(child);
+      if (!groupAlive(child)) {
+        if (sigkillTimer !== undefined) clearTimeout(sigkillTimer);
+        live.delete(child);
+      }
       settleFromBuffers(exitCode, signalCode);
+      stdoutChunks.length = 0; // the buffers are not kept for a group that may linger
+      stderrChunks.length = 0;
     });
   });
 }

@@ -284,6 +284,30 @@ test("a second signal during the shutdown grace ends the server at once, SIGKILL
   assert.ok(!alive(helperPid), "the helper was SIGKILLed before the server ended");
 });
 
+test("a cancelled call whose group died at once leaves nothing behind: the server's shutdown does not wait the grace", async () => {
+  await fresh();
+  const { spawn } = await import("node:child_process");
+  const script = `
+    const { execute, installShutdownHandlers } = await import(${JSON.stringify(new URL("../dist/executor.js", import.meta.url).href)});
+    installShutdownHandlers();
+    const ac = new AbortController();
+    execute({ args: ["-p", "x"], timeoutMs: 30_000, signal: ac.signal }).catch(() => {});
+    setTimeout(() => ac.abort(), 700);
+    setTimeout(() => {}, 60_000);
+  `;
+  const server = spawn(process.execPath, ["--input-type=module", "-e", script], {
+    stdio: ["ignore", "ignore", "inherit"],
+    env: { ...process.env, FAKE_OBEYS_TERM: "1", CURSOR_KILL_GRACE_MS: "20000" },
+  });
+  const pid = await childPid();
+  await sleep(1_000); // the abort happened, the leader obeyed SIGTERM, the group is empty
+  assert.ok(!alive(pid));
+  const signalled = Date.now();
+  server.kill("SIGTERM");
+  await new Promise((r) => server.once("exit", r));
+  assert.ok(Date.now() - signalled < 3_000, "no 20 s grace for an empty group");
+});
+
 test("the tool handler passes the request signal on: handleCursorAgent is cancelled through it", async () => {
   await fresh();
   const ac = new AbortController();
