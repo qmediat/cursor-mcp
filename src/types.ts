@@ -12,6 +12,9 @@ export const CursorMode = z.enum(["agent", "plan", "ask"]);
 /** A session id as cursor-agent prints it: one word, never something that could read as an option. */
 export const CursorSessionId = z.string().min(1).max(200).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/, "a session id");
 
+/** A workspace path: a value of `--workspace`, never something that could read as an option. */
+export const CursorWorkspace = z.string().min(1).max(4096).refine((p) => !p.startsWith("-"), "a path");
+
 export const CursorResultSchema = z.object({
   type: z.string(),
   subtype: z.string().optional(),
@@ -30,5 +33,9 @@ export type CursorModeType = z.infer<typeof CursorMode>;
 export const DEFAULT_TIMEOUT_MS = 600_000; // 10 minutes — agent mode can be slow
 /** After SIGTERM (the spawn `signal` option), a child still alive this long is sent SIGKILL (CURSOR_KILL_GRACE_MS overrides). */
 export const DEFAULT_KILL_GRACE_MS = 5_000;
+/** The longest delay setTimeout honours (2^31 - 1 ms); above it Node fires the timer after 1 ms. */
+export const MAX_TIMER_MS = 2_147_483_647;
+/** More concurrent cursor-agent processes than this is a configuration error, not a setting. */
+export const MAX_CONCURRENCY_LIMIT = 64;
 export const DEFAULT_MAX_CONCURRENCY = 3;
 export const CURSOR_BINARY = "cursor-agent";

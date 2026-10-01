@@ -1,7 +1,8 @@
 import { z } from "zod/v4";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { execute } from "../executor.js";
-import { CursorModel, CursorMode, DEFAULT_TIMEOUT_MS } from "../types.js";
+import { CursorModel, CursorMode, CursorWorkspace, DEFAULT_TIMEOUT_MS } from "../types.js";
+import { headlessArgs } from "../cursor-argv.js";
 import { formatDuration } from "../utils.js";
 import { sessionStore } from "../session-store.js";
 
@@ -15,7 +16,7 @@ export const cursorAgentInputSchema = z.object({
   mode: CursorMode.optional().describe(
     "Agent mode. 'agent' = full capabilities (file edit, terminal, search). 'plan' = design-focused, asks clarifying questions. 'ask' = read-only exploration. Default: agent.",
   ),
-  workspace: z.string().optional().describe(
+  workspace: CursorWorkspace.optional().describe(
     "Working directory for the agent. Affects file search scope and project context. Default: server's current working directory.",
   ),
   cloud: z.boolean().optional().describe(
@@ -30,14 +31,7 @@ export type CursorAgentArgs = z.infer<typeof cursorAgentInputSchema>;
 
 /** The cursor-agent argv for a cursor_agent call. `--force` comes from the operator's environment only (SECURITY.md). */
 export function buildCursorAgentArgs(args: CursorAgentArgs, env: NodeJS.ProcessEnv = process.env): string[] {
-  const cliArgs = ["-p", "--output-format", "json", "--trust"];
-
-  // --force/--yolo: auto-approve all tool calls (file writes, terminal commands).
-  // SECURITY: Never exposed as a tool parameter — LLMs must not control this.
-  // Only the server operator can enable it via CURSOR_ALLOW_YOLO=true env var.
-  if (env.CURSOR_ALLOW_YOLO === "true") {
-    cliArgs.push("--force");
-  }
+  const cliArgs = headlessArgs(env);
 
   if (args.model && args.model !== "auto") {
     cliArgs.push("--model", args.model);

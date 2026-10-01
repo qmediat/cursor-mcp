@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { buildCursorAgentArgs, cursorAgentInputSchema } from "../dist/tools/cursor-agent.js";
 import { buildCursorReplyArgs, cursorReplyInputSchema } from "../dist/tools/cursor-reply.js";
 import { cleanModelsOutput } from "../dist/tools/cursor-models.js";
-import { parseMaxConcurrency } from "../dist/executor.js";
+import { parseKillGraceMs, parseMaxConcurrency } from "../dist/executor.js";
 
 test("any model id cursor-agent could accept passes the schema and reaches --model; `auto` sends no --model", () => {
   for (const id of ["composer-2.5", "cursor/claude-opus-5.5", "grok-4.7", "gpt-5.6-sol"]) {
@@ -69,4 +69,22 @@ test("cursor_models drops the CLI's 'Loading models…' status line and keeps th
   const real = "\u001b[2K\u001b[GLoading models…\n\u001b[2K\u001b[1A\u001b[2K\u001b[Gauto - Auto\ncomposer-2.5 - Composer 2.5\n";
   assert.equal(cleanModelsOutput(real), "auto - Auto\ncomposer-2.5 - Composer 2.5");
   assert.equal(cleanModelsOutput("\u001b[2K\u001b[GLoading models…\n\u001b[2K\u001b[1A\u001b[2K\u001b[GNo models available for this account.\n"), "");
+});
+
+test("a workspace that reads as an option is rejected by the schema", () => {
+  assert.equal(cursorAgentInputSchema.safeParse({ prompt: "x", workspace: "-f" }).success, false);
+  assert.equal(cursorAgentInputSchema.safeParse({ prompt: "x", workspace: "/tmp/w" }).success, true);
+});
+
+test("a model list that mentions 'no models available' in a line is kept; only that answer alone is empty", () => {
+  assert.equal(cleanModelsOutput("No models available for this account"), "");
+  assert.equal(cleanModelsOutput("auto\ncomposer-2.5 (no models available on free plans)"), "auto\ncomposer-2.5 (no models available on free plans)");
+});
+
+test("CURSOR_KILL_GRACE_MS above what a timer can wait, and CURSOR_MAX_CONCURRENCY above 64, are the defaults", () => {
+  assert.equal(parseKillGraceMs("2147483647"), 2147483647);
+  assert.equal(parseKillGraceMs("2147483648"), 5000, "Node would fire this timer after 1 ms");
+  assert.equal(parseKillGraceMs("300"), 300);
+  assert.equal(parseMaxConcurrency("64"), 64);
+  assert.equal(parseMaxConcurrency("1000000"), 3);
 });

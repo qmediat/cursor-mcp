@@ -20,7 +20,7 @@ MCP server for the [Cursor CLI](https://cursor.com/docs/cli) (`cursor-agent`): r
 - **Any Cursor model** — the `model` id is passed to `cursor-agent --model` as given; `cursor_models` lists what your CLI offers (Composer, Claude, GPT, Gemini, Grok families on your plan)
 - **5 tools** — agent execution, session continuation, model listing, session listing, health check
 - **Parallel execution** — run multiple models simultaneously with built-in concurrency control (semaphore)
-- **Guarded execution** — `spawn` without a shell, auto-approve only through the operator's environment (never a tool parameter), the client's cancellation and the timeout kill the child (SIGTERM, SIGKILL 5 s later)
+- **Guarded execution** — `spawn` without a shell, auto-approve only through the operator's environment (never a tool parameter), the client's cancellation and the timeout kill the child and its process group (SIGTERM, SIGKILL 5 s later)
 - **Minimal dependencies** — only `@modelcontextprotocol/sdk` + `zod`
 - **Session management** — resume conversations across calls
 
@@ -96,9 +96,9 @@ or by hand (below). `npm install -g @qmediat.io/cursor-mcp` installs the `cursor
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `CURSOR_MAX_CONCURRENCY` | No | `3` | Maximum concurrent cursor-agent processes — a positive integer; anything else is the default |
+| `CURSOR_MAX_CONCURRENCY` | No | `3` | Maximum concurrent cursor-agent processes — an integer from 1 to 64; anything else is the default |
 | `CURSOR_ALLOW_YOLO` | No | `false` | `true` runs `cursor_agent` and `cursor_reply` with `--force` (auto-approve every tool call). **DANGEROUS** — only for trusted environments |
-| `CURSOR_KILL_GRACE_MS` | No | `5000` | After SIGTERM (timeout or cancellation), a child still alive this long is sent SIGKILL — a positive integer of milliseconds |
+| `CURSOR_KILL_GRACE_MS` | No | `5000` | After SIGTERM (timeout or cancellation), a child still alive this long is sent SIGKILL — an integer of milliseconds from 1 to 2147483647 (what a timer can wait); anything else is the default |
 
 ## Available Tools
 
@@ -140,7 +140,7 @@ The built-in semaphore (default: 3) queues excess requests to prevent rate limit
 - **No shell execution** — `child_process.spawn` with argument arrays; the prompt follows a `--` separator and the session id must be one word, so neither can read as a `cursor-agent` option (a prompt or session id of `-f` cannot turn into `--force`)
 - **No credentials stored** — cursor-agent handles its own OAuth
 - **No HTTP requests** — pure CLI wrapper, no network access beyond cursor-agent
-- **Process cleanup** — the client's cancellation (the MCP request signal) and the timeout kill the child: SIGTERM, then SIGKILL after `CURSOR_KILL_GRACE_MS` (5 s); the call and its concurrency slot are released only once the child is gone
+- **Process cleanup** — the client's cancellation (the MCP request signal) and the timeout kill the child and the helpers in its process group: SIGTERM, then SIGKILL after `CURSOR_KILL_GRACE_MS` (5 s); the call and its concurrency slot are released only once the child itself has exited
 - **Auto-approve gated** — `--force` requires explicit `CURSOR_ALLOW_YOLO=true` env var, never controllable by LLMs; it applies to `cursor_agent` and `cursor_reply` alike
 - **Trusted workspace** — every call runs `cursor-agent --trust` on the given `workspace` (the server's cwd by default), so the agent is not prompted about the directory: point `workspace` only at directories you intend it to operate in
 - **Concurrency limited** — semaphore prevents resource exhaustion

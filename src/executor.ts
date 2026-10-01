@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { which } from "./utils.js";
 import { CursorCliError, CursorTimeoutError, CursorNotFoundError, CursorAbortError } from "./errors.js";
-import { CursorResultSchema, DEFAULT_TIMEOUT_MS, CURSOR_BINARY, DEFAULT_KILL_GRACE_MS, DEFAULT_MAX_CONCURRENCY } from "./types.js";
+import { CursorResultSchema, DEFAULT_TIMEOUT_MS, CURSOR_BINARY, DEFAULT_KILL_GRACE_MS, DEFAULT_MAX_CONCURRENCY, MAX_TIMER_MS, MAX_CONCURRENCY_LIMIT } from "./types.js";
 import type { CursorResult } from "./types.js";
 
 let binaryPath: string | null = null;
@@ -39,16 +39,26 @@ class Semaphore {
 
   constructor(private readonly max: number) {}
 
-  async acquire(): Promise<() => void> {
+  /** A slot, or a wait for one that the request's signal can end: a cancelled request leaves the queue at once. */
+  async acquire(signal?: AbortSignal): Promise<() => void> {
+    if (signal?.aborted) throw new CursorAbortError();
     if (this.active < this.max) {
       this.active++;
       return () => this.release();
     }
-    return new Promise((resolve) => {
-      this.queue.push(() => {
+    return new Promise((resolve, reject) => {
+      const grant = (): void => {
+        signal?.removeEventListener("abort", leave);
         this.active++;
         resolve(() => this.release());
-      });
+      };
+      const leave = (): void => {
+        const at = this.queue.indexOf(grant);
+        if (at >= 0) this.queue.splice(at, 1);
+        reject(new CursorAbortError());
+      };
+      signal?.addEventListener("abort", leave, { once: true });
+      this.queue.push(grant);
     });
   }
 
@@ -59,24 +69,30 @@ class Semaphore {
   }
 }
 
-/** CURSOR_MAX_CONCURRENCY as a positive integer; anything else (unset, 0, negative, fractional, text) is the default. */
+/** An environment knob as an integer in [1, max]; anything else (unset, 0, negative, fractional, text, above max) is
+ * the default. */
+function parseBounded(raw: string | undefined, fallback: number, max: number): number {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 1 && n <= max ? n : fallback;
+}
+
+/** CURSOR_MAX_CONCURRENCY: 1 to MAX_CONCURRENCY_LIMIT, else the default 3. */
 export function parseMaxConcurrency(raw: string | undefined): number {
-  if (raw === undefined || raw.trim() === "") return DEFAULT_MAX_CONCURRENCY;
-  const n = Number(raw);
-  return Number.isInteger(n) && n >= 1 ? n : DEFAULT_MAX_CONCURRENCY;
+  return parseBounded(raw, DEFAULT_MAX_CONCURRENCY, MAX_CONCURRENCY_LIMIT);
 }
 
-const semaphore = new Semaphore(parseMaxConcurrency(process.env.CURSOR_MAX_CONCURRENCY));
-
-/** CURSOR_KILL_GRACE_MS as a positive integer of milliseconds; anything else is the default. */
+/** CURSOR_KILL_GRACE_MS: 1 to MAX_TIMER_MS milliseconds (what setTimeout can wait), else the default 5000. */
 export function parseKillGraceMs(raw: string | undefined): number {
-  if (raw === undefined || raw.trim() === "") return DEFAULT_KILL_GRACE_MS;
-  const n = Number(raw);
-  return Number.isInteger(n) && n >= 1 ? n : DEFAULT_KILL_GRACE_MS;
+  return parseBounded(raw, DEFAULT_KILL_GRACE_MS, MAX_TIMER_MS);
 }
+
+// both read once, with the other knobs, when the server starts
+const semaphore = new Semaphore(parseMaxConcurrency(process.env.CURSOR_MAX_CONCURRENCY));
+const killGraceMs = parseKillGraceMs(process.env.CURSOR_KILL_GRACE_MS);
 
 export async function execute(options: ExecuteOptions): Promise<ExecuteResult> {
-  const release = await semaphore.acquire();
+  const release = await semaphore.acquire(options.signal);
   try {
     return await executeInternal(options);
   } finally {
@@ -97,21 +113,48 @@ async function executeInternal(options: ExecuteOptions): Promise<ExecuteResult> 
   return new Promise<ExecuteResult>((resolve, reject) => {
     let settled = false;
 
+    // Its own process group (POSIX): a cancellation reaches cursor-agent's children too, so none keeps editing
+    // after the request is reported aborted, and a grandchild that inherited the pipes cannot keep the request alive.
     const child = spawn(binary, args, {
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env },
-      signal: combinedSignal,
+      detached: process.platform !== "win32",
     });
 
-    // The spawn `signal` sends SIGTERM once; a CLI that ignores it would outlive the request and keep its semaphore
-    // slot. SIGKILL follows after the grace period unless the child has exited.
-    let killTimer: NodeJS.Timeout | undefined;
-    const escalate = (): void => {
-      killTimer = setTimeout(() => {
-        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-      }, parseKillGraceMs(process.env.CURSOR_KILL_GRACE_MS));
+    const killTree = (sig: NodeJS.Signals): void => {
+      if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
+      try {
+        if (process.platform === "win32") child.kill(sig);
+        else process.kill(-child.pid, sig);
+      } catch {
+        try {
+          child.kill(sig); // no group to signal (already gone): the child itself
+        } catch {
+          // gone between the checks
+        }
+      }
     };
-    combinedSignal.addEventListener("abort", escalate, { once: true });
+
+    // A cancellation (the client's signal or the timeout) sends SIGTERM to the group; SIGKILL follows after the grace
+    // period unless the child has exited. The promise (and the semaphore slot behind it) is released only once the
+    // child itself is gone — on `exit`, not `close`: a grandchild that still holds the pipes was signalled with the
+    // group and may not keep the slot.
+    let abortError: Error | null = null;
+    let killTimer: NodeJS.Timeout | undefined;
+    const onAbort = (): void => {
+      if (abortError !== null) return;
+      abortError = timeoutSignal.aborted ? new CursorTimeoutError(timeoutMs) : new CursorAbortError();
+      killTree("SIGTERM");
+      killTimer = setTimeout(() => killTree("SIGKILL"), killGraceMs);
+    };
+    combinedSignal.addEventListener("abort", onAbort, { once: true });
+    // a signal that was aborted before the listener existed never fires it
+    if (combinedSignal.aborted) onAbort();
+
+    const cleanup = (): void => {
+      if (killTimer !== undefined) clearTimeout(killTimer);
+      combinedSignal.removeEventListener("abort", onAbort);
+    };
 
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
@@ -122,36 +165,37 @@ async function executeInternal(options: ExecuteOptions): Promise<ExecuteResult> 
     const finish = (error: Error | null, result?: ExecuteResult): void => {
       if (settled) return;
       settled = true;
+      cleanup();
       if (error) reject(error);
       else resolve(result!);
     };
 
-    // An abort is settled on `close`, not on the AbortError: the promise (and the semaphore slot behind it) is
-    // released only once the child is gone — after SIGTERM, or SIGKILL when it ignored SIGTERM.
-    let abortError: Error | null = null;
-
     child.on("error", (error) => {
-      if (error.name === "AbortError") {
-        // Distinguish timeout from MCP client cancellation
-        abortError = timeoutSignal.aborted ? new CursorTimeoutError(timeoutMs) : new CursorAbortError();
-      } else if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         finish(new CursorNotFoundError());
       } else {
         finish(new CursorCliError(null, "", error.message));
       }
     });
 
-    child.on("close", (exitCode) => {
-      if (killTimer !== undefined) clearTimeout(killTimer);
-      combinedSignal.removeEventListener("abort", escalate);
-      if (abortError) {
+    child.on("exit", () => {
+      if (abortError !== null) finish(abortError);
+    });
+
+    child.on("close", (exitCode, signalCode) => {
+      if (abortError !== null) {
         finish(abortError);
         return;
       }
       const stdout = Buffer.concat(stdoutChunks).toString("utf-8").trim();
       const stderr = Buffer.concat(stderrChunks).toString("utf-8").trim();
 
-      if (exitCode !== 0 && exitCode !== null) {
+      if (exitCode === null) {
+        // killed by something other than this request (an operator, the OOM killer): not a result
+        finish(new CursorCliError(null, stderr, `cursor-agent was killed by ${signalCode ?? "a signal"}`));
+        return;
+      }
+      if (exitCode !== 0) {
         finish(new CursorCliError(exitCode, stderr, `cursor-agent exited with code ${exitCode}`));
         return;
       }

@@ -1,6 +1,7 @@
 import { z } from "zod/v4";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { execute } from "../executor.js";
+import { headlessArgs } from "../cursor-argv.js";
 import { CursorModel, CursorSessionId, DEFAULT_TIMEOUT_MS } from "../types.js";
 import { formatDuration } from "../utils.js";
 import { sessionStore } from "../session-store.js";
@@ -25,16 +26,7 @@ export type CursorReplyArgs = z.infer<typeof cursorReplyInputSchema>;
 /** The cursor-agent argv for a cursor_reply call: the same `--force` gate as cursor_agent, so a session that was
  * auto-approved keeps applying its edits on follow-ups (before 1.1.0 a reply only proposed them). */
 export function buildCursorReplyArgs(args: CursorReplyArgs, env: NodeJS.ProcessEnv = process.env): string[] {
-  const cliArgs = [
-    "-p",
-    "--output-format", "json",
-    "--trust",
-    "--resume", args.session_id,
-  ];
-
-  if (env.CURSOR_ALLOW_YOLO === "true") {
-    cliArgs.push("--force");
-  }
+  const cliArgs = [...headlessArgs(env), "--resume", args.session_id];
 
   if (args.model && args.model !== "auto") {
     cliArgs.push("--model", args.model);

@@ -6,7 +6,7 @@ import { CURSOR_BINARY } from "../types.js";
 
 export const cursorHealthInputSchema = z.object({});
 
-export async function handleCursorHealth(): Promise<CallToolResult> {
+export async function handleCursorHealth(signal?: AbortSignal): Promise<CallToolResult> {
   const checks: string[] = [];
   let healthy = true;
 
@@ -26,6 +26,7 @@ export async function handleCursorHealth(): Promise<CallToolResult> {
         args: ["--version"],
         timeoutMs: 10_000,
         parseJson: false,
+        ...(signal ? { signal } : {}),
       });
       checks.push(`[OK] Version: ${result.stdout}`);
     } catch {
@@ -41,6 +42,7 @@ export async function handleCursorHealth(): Promise<CallToolResult> {
         args: ["status"],
         timeoutMs: 15_000,
         parseJson: false,
+        ...(signal ? { signal } : {}),
       });
       if (result.stdout.toLowerCase().includes("not logged in") ||
           result.stdout.toLowerCase().includes("not authenticated")) {
