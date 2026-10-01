@@ -1,6 +1,6 @@
 {
   "name": "@qmediat.io/cursor-mcp",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "mcpName": "io.github.qmediat/cursor-mcp",
   "files": [
     "dist",
@@ -9,7 +9,7 @@
     "CHANGELOG.md",
     "SECURITY.md"
   ],
-  "description": "MCP server for Cursor CLI — access Composer 2, Claude, GPT, Gemini, and Grok models through Model Context Protocol",
+  "description": "MCP server for the Cursor CLI (cursor-agent): run Cursor's agent with any model id your plan offers — Composer, Claude, GPT, Gemini, Grok families — through the Model Context Protocol",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -28,14 +28,13 @@
   },
   "keywords": [
     "mcp",
+    "mcp-server",
     "cursor",
     "cursor-agent",
-    "composer-2",
+    "composer",
     "ai",
     "model-context-protocol",
     "claude-code",
-    "code-generation",
-    "code-review",
     "multi-model"
   ],
   "homepage": "https://www.qmediat.io/open-source",

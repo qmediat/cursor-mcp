@@ -4,61 +4,39 @@ import { execute } from "../executor.js";
 
 export const cursorModelsInputSchema = z.object({});
 
-export async function handleCursorModels(): Promise<CallToolResult> {
-  // cursor-agent doesn't have a dedicated `models` subcommand yet,
-  // so we return the known model list. This is kept in sync with
-  // Cursor's documentation and updated with each release.
-  //
-  // If cursor-agent adds `models` subcommand in the future,
-  // we should call it dynamically here.
+const ANSI = /\x1B\[[0-9;?]*[ -\/]*[@-~]/g;
 
+/** The CLI's `models` output as text: ANSI stripped; empty when it lists nothing ("No models available …"). */
+export function cleanModelsOutput(stdout: string): string {
+  const text = stdout.replace(ANSI, "").trim();
+  if (text === "" || /no models available/i.test(text)) return "";
+  return text;
+}
+
+/** Ids seen in Cursor's documentation when this release was made; the CLI's own list is the source of truth. */
+const KNOWN_MODEL_IDS = ["auto", "composer-2.5", "composer-2.5-fast"] as const;
+
+export const FALLBACK_TEXT =
+  "The installed cursor-agent listed no models (no `models` output, or 'No models available for this account').\n" +
+  "Any id cursor-agent accepts can be passed as `model`; `auto` lets Cursor choose. Ids seen in Cursor's documentation when " +
+  `this release was made: ${KNOWN_MODEL_IDS.join(", ")}. The current list and prices: ` +
+  "https://cursor.com/docs/models-and-pricing (or run `cursor-agent models` / `agent models` in a terminal).";
+
+export async function handleCursorModels(): Promise<CallToolResult> {
   let dynamicOutput = "";
 
   try {
-    // Attempt to get models from CLI (may not be supported yet)
     const result = await execute({
       args: ["models"],
       timeoutMs: 15_000,
       parseJson: false,
     });
-    dynamicOutput = result.stdout;
+    dynamicOutput = cleanModelsOutput(result.stdout);
   } catch {
-    // Expected — `models` subcommand may not exist yet
+    // an older CLI without `models`, or not logged in: the fallback text says what to do
   }
-
-  if (dynamicOutput) {
-    return {
-      content: [{ type: "text" as const, text: dynamicOutput }],
-    };
-  }
-
-  // Fallback: static list from Cursor documentation
-  const models = [
-    { name: "auto", description: "Cursor auto-selects the best model (default)" },
-    { name: "composer-2", description: "Cursor Composer 2 — proprietary, 200K context, $0.50/$2.50 per 1M tokens" },
-    { name: "composer-2-fast", description: "Composer 2 fast variant — same intelligence, lower latency, $1.50/$7.50 per 1M tokens" },
-    { name: "composer-1.5", description: "Cursor Composer 1.5 — previous generation" },
-    { name: "composer-1", description: "Cursor Composer 1 — legacy" },
-    { name: "cursor/claude-4-sonnet", description: "Claude 4 Sonnet via Cursor" },
-    { name: "cursor/claude-4.5-sonnet", description: "Claude 4.5 Sonnet via Cursor" },
-    { name: "cursor/claude-4.6-opus-high", description: "Claude 4.6 Opus (high compute) via Cursor" },
-    { name: "cursor/gpt-5.1", description: "GPT-5.1 via Cursor" },
-    { name: "cursor/gpt-5.2", description: "GPT-5.2 via Cursor" },
-    { name: "gpt-5.4", description: "GPT-5.4" },
-    { name: "gpt-5.4-mini", description: "GPT-5.4 Mini" },
-    { name: "cursor/gemini-3-flash", description: "Gemini 3 Flash via Cursor" },
-    { name: "gemini-3.1-pro", description: "Gemini 3.1 Pro" },
-    { name: "gemini-3-pro", description: "Gemini 3 Pro" },
-    { name: "cursor/grok", description: "Grok via Cursor" },
-    { name: "kimi-k2.5", description: "Moonshot Kimi K2.5" },
-  ];
-
-  const lines = models.map((m) => `${m.name.padEnd(35)} ${m.description}`);
 
   return {
-    content: [{
-      type: "text" as const,
-      text: `Available Cursor models:\n\n${lines.join("\n")}\n\nNote: Model availability depends on your Cursor subscription plan.\nUse --model <name> with cursor-agent to select a specific model.`,
-    }],
+    content: [{ type: "text" as const, text: dynamicOutput || FALLBACK_TEXT }],
   };
 }

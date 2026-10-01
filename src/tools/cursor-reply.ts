@@ -13,16 +13,18 @@ export const cursorReplyInputSchema = z.object({
     "Session ID from a previous cursor-agent call. Use cursor-sessions to list available sessions.",
   ),
   model: CursorModel.optional().describe(
-    "Override the model for this reply. If omitted, uses the session's original model.",
+    "Override the model for this reply (any id cursor_models lists). If omitted, uses the session's original model.",
   ),
   timeout_seconds: z.number().int().min(10).max(3600).optional().describe(
     "Maximum execution time in seconds (10-3600). Default: 600 (10 minutes).",
   ),
 });
 
-export async function handleCursorReply(
-  args: z.infer<typeof cursorReplyInputSchema>,
-): Promise<CallToolResult> {
+export type CursorReplyArgs = z.infer<typeof cursorReplyInputSchema>;
+
+/** The cursor-agent argv for a cursor_reply call: the same `--force` gate as cursor_agent, so a session that was
+ * auto-approved keeps applying its edits on follow-ups (before 1.1.0 a reply only proposed them). */
+export function buildCursorReplyArgs(args: CursorReplyArgs, env: NodeJS.ProcessEnv = process.env): string[] {
   const cliArgs = [
     "-p",
     "--output-format", "json",
@@ -30,17 +32,29 @@ export async function handleCursorReply(
     "--resume", args.session_id,
   ];
 
+  if (env.CURSOR_ALLOW_YOLO === "true") {
+    cliArgs.push("--force");
+  }
+
   if (args.model && args.model !== "auto") {
     cliArgs.push("--model", args.model);
   }
 
   cliArgs.push(args.prompt);
+  return cliArgs;
+}
+
+export async function handleCursorReply(
+  args: CursorReplyArgs,
+  signal?: AbortSignal,
+): Promise<CallToolResult> {
+  const cliArgs = buildCursorReplyArgs(args);
 
   const timeoutMs = args.timeout_seconds
     ? args.timeout_seconds * 1000
     : DEFAULT_TIMEOUT_MS;
 
-  const result = await execute({ args: cliArgs, timeoutMs });
+  const result = await execute({ args: cliArgs, timeoutMs, ...(signal ? { signal } : {}) });
 
   const lines: string[] = [];
 

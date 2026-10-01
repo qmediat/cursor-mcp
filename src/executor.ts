@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { which } from "./utils.js";
 import { CursorCliError, CursorTimeoutError, CursorNotFoundError, CursorAbortError } from "./errors.js";
-import { CursorResultSchema, DEFAULT_TIMEOUT_MS, CURSOR_BINARY } from "./types.js";
+import { CursorResultSchema, DEFAULT_TIMEOUT_MS, CURSOR_BINARY, KILL_GRACE_MS, DEFAULT_MAX_CONCURRENCY } from "./types.js";
 import type { CursorResult } from "./types.js";
 
 let binaryPath: string | null = null;
@@ -59,8 +59,14 @@ class Semaphore {
   }
 }
 
-const maxConcurrency = Number(process.env.CURSOR_MAX_CONCURRENCY) || 3;
-const semaphore = new Semaphore(maxConcurrency);
+/** CURSOR_MAX_CONCURRENCY as a positive integer; anything else (unset, 0, negative, fractional, text) is the default. */
+export function parseMaxConcurrency(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === "") return DEFAULT_MAX_CONCURRENCY;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 1 ? n : DEFAULT_MAX_CONCURRENCY;
+}
+
+const semaphore = new Semaphore(parseMaxConcurrency(process.env.CURSOR_MAX_CONCURRENCY));
 
 export async function execute(options: ExecuteOptions): Promise<ExecuteResult> {
   const release = await semaphore.acquire();
@@ -89,6 +95,16 @@ async function executeInternal(options: ExecuteOptions): Promise<ExecuteResult> 
       env: { ...process.env },
       signal: combinedSignal,
     });
+
+    // The spawn `signal` sends SIGTERM once; a CLI that ignores it would outlive the request and keep its semaphore
+    // slot. SIGKILL follows after the grace period unless the child has exited.
+    let killTimer: NodeJS.Timeout | undefined;
+    const escalate = (): void => {
+      killTimer = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      }, KILL_GRACE_MS);
+    };
+    combinedSignal.addEventListener("abort", escalate, { once: true });
 
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
@@ -119,6 +135,8 @@ async function executeInternal(options: ExecuteOptions): Promise<ExecuteResult> 
     });
 
     child.on("close", (exitCode) => {
+      if (killTimer !== undefined) clearTimeout(killTimer);
+      combinedSignal.removeEventListener("abort", escalate);
       const stdout = Buffer.concat(stdoutChunks).toString("utf-8").trim();
       const stderr = Buffer.concat(stderrChunks).toString("utf-8").trim();
 

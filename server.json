@@ -1,30 +1,30 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.qmediat/cursor-mcp",
-  "description": "Cursor CLI — access Composer 2, Claude, GPT, Gemini, and Grok models through MCP",
+  "description": "Cursor CLI (cursor-agent) through MCP: run Cursor's agent with any model id your plan offers (Composer, Claude, GPT, Gemini, Grok families), resume sessions, list models.",
   "repository": {
     "url": "https://github.com/qmediat/cursor-mcp",
     "source": "github"
   },
-  "version": "1.0.3",
+  "version": "1.1.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@qmediat.io/cursor-mcp",
-      "version": "1.0.3",
+      "version": "1.1.0",
       "transport": {
         "type": "stdio"
       },
       "environmentVariables": [
         {
-          "description": "Maximum concurrent cursor-agent processes (default: 3)",
+          "description": "Maximum concurrent cursor-agent processes: a positive integer; anything else is the default 3.",
           "isRequired": false,
           "format": "string",
           "isSecret": false,
           "name": "CURSOR_MAX_CONCURRENCY"
         },
         {
-          "description": "Enable auto-approve mode for cursor-agent (--force). DANGEROUS: auto-approves all file writes and terminal commands. Only for trusted environments.",
+          "description": "Set to `true` to run cursor-agent with --force (auto-approve every tool call) in cursor_agent and cursor_reply. DANGEROUS — trusted environments only. Never exposed as a tool parameter.",
           "isRequired": false,
           "format": "string",
           "isSecret": false,

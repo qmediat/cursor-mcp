@@ -1,24 +1,11 @@
 import { z } from "zod/v4";
 
-export const CursorModel = z.enum([
-  "auto",
-  "composer-2",
-  "composer-2-fast",
-  "composer-1.5",
-  "composer-1",
-  "cursor/claude-4-sonnet",
-  "cursor/claude-4.5-sonnet",
-  "cursor/claude-4.6-opus-high",
-  "cursor/gpt-5.1",
-  "cursor/gpt-5.2",
-  "gpt-5.4",
-  "gpt-5.4-mini",
-  "cursor/gemini-3-flash",
-  "gemini-3.1-pro",
-  "gemini-3-pro",
-  "cursor/grok",
-  "kimi-k2.5",
-]);
+/**
+ * A model id is passed through to `cursor-agent --model` as given: Cursor adds and retires models faster than this
+ * package releases, and a closed list rejected every current model before the CLI could see it (1.0.x). `auto` lets
+ * Cursor choose. `cursor_models` lists what the installed CLI offers.
+ */
+export const CursorModel = z.string().min(1).max(200).regex(/^[A-Za-z0-9][A-Za-z0-9._\/-]*$/, "a model id");
 
 export const CursorMode = z.enum(["agent", "plan", "ask"]);
 
@@ -38,4 +25,7 @@ export type CursorModelType = z.infer<typeof CursorModel>;
 export type CursorModeType = z.infer<typeof CursorMode>;
 
 export const DEFAULT_TIMEOUT_MS = 600_000; // 10 minutes — agent mode can be slow
+/** After SIGTERM (the spawn `signal` option), a child still alive this long is sent SIGKILL. */
+export const KILL_GRACE_MS = 5_000;
+export const DEFAULT_MAX_CONCURRENCY = 3;
 export const CURSOR_BINARY = "cursor-agent";

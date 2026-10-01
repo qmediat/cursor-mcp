@@ -13,14 +13,14 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-blue)](https://www.typescriptlang.org/)
 
-MCP server for [Cursor CLI](https://cursor.com/docs/cli) — access Composer 2, Claude, GPT, Gemini, and Grok models through the [Model Context Protocol](https://modelcontextprotocol.io).
+MCP server for the [Cursor CLI](https://cursor.com/docs/cli) (`cursor-agent`): run Cursor's agent with any model id your plan offers — the Composer, Claude, GPT, Gemini and Grok families — through the [Model Context Protocol](https://modelcontextprotocol.io).
 
 ## Why this server?
 
-- **Multi-model access** — Composer 2, Claude 4.6 Opus, GPT-5.4, Gemini 3 Pro, Grok, Kimi K2.5 through a single interface
+- **Any Cursor model** — the `model` id is passed to `cursor-agent --model` as given; `cursor_models` lists what your CLI offers (Composer, Claude, GPT, Gemini, Grok families on your plan)
 - **5 tools** — agent execution, session continuation, model listing, session listing, health check
 - **Parallel execution** — run multiple models simultaneously with built-in concurrency control (semaphore)
-- **Security-first** — `spawn` (no shell), auto-approve gated by env var (never LLM-controllable), AbortSignal cancellation
+- **Guarded execution** — `spawn` without a shell, auto-approve only through the operator's environment (never a tool parameter), the client's cancellation and the timeout kill the child (SIGTERM, SIGKILL 5 s later)
 - **Minimal dependencies** — only `@modelcontextprotocol/sdk` + `zod`
 - **Session management** — resume conversations across calls
 
@@ -32,24 +32,22 @@ MCP server for [Cursor CLI](https://cursor.com/docs/cli) — access Composer 2, 
 2. **Cursor CLI** installed and authenticated:
 
 ```bash
-# Install cursor-agent
+# Install the Cursor CLI (installs `agent`; `cursor-agent` stays as a legacy alias — the one this server resolves)
 curl https://cursor.com/install -fsS | bash
 
-# Authenticate (requires Cursor Pro/Business subscription)
-cursor-agent login
+# Authenticate (a Cursor account whose plan includes agent usage — see cursor.com/docs/models-and-pricing)
+agent login
 ```
+
+Requires Node.js 22 or newer.
 
 ### Install
 
 ```bash
-npm install -g @qmediat.io/cursor-mcp
+claude mcp add --scope user cursor-cli -- npx -y @qmediat.io/cursor-mcp
 ```
 
-Or run directly with npx:
-
-```bash
-npx @qmediat.io/cursor-mcp
-```
+or by hand (below). `npm install -g @qmediat.io/cursor-mcp` installs the `cursor-mcp` command, which can replace the `npx` line in any config.
 
 ## Configuration
 
@@ -98,42 +96,29 @@ npx @qmediat.io/cursor-mcp
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `CURSOR_MAX_CONCURRENCY` | No | `3` | Maximum concurrent cursor-agent processes |
-| `CURSOR_ALLOW_YOLO` | No | `false` | Enable `--force` mode (auto-approve all tool calls). **DANGEROUS** — only for trusted environments |
+| `CURSOR_MAX_CONCURRENCY` | No | `3` | Maximum concurrent cursor-agent processes — a positive integer; anything else is the default |
+| `CURSOR_ALLOW_YOLO` | No | `false` | `true` runs `cursor_agent` and `cursor_reply` with `--force` (auto-approve every tool call). **DANGEROUS** — only for trusted environments |
 
 ## Available Tools
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
-| `cursor_agent` | Execute a prompt using Cursor's AI agent | `prompt`, `model`, `mode`, `workspace`, `cloud`, `timeout_seconds` |
+| `cursor_agent` | Execute a prompt using Cursor's AI agent | `prompt` (≤ 100 000 chars), `model`, `mode`, `workspace`, `cloud` (experimental), `timeout_seconds` (10–3600, default 600) |
 | `cursor_reply` | Continue an existing agent session | `prompt`, `session_id`, `model`, `timeout_seconds` |
-| `cursor_models` | List all available AI models | — |
+| `cursor_models` | List the model ids the installed CLI offers | — |
 | `cursor_sessions` | List agent sessions (this server instance) | — |
 | `cursor_health` | Check installation, auth, and config | — |
 
 ### Models
 
-| Model | Description | Pricing (input/output per 1M tokens) |
-|-------|-------------|---------------------------------------|
-| `auto` | Cursor auto-selects (default) | varies |
-| `composer-2` | Cursor Composer 2 — 200K context | $0.50 / $2.50 |
-| `composer-2-fast` | Composer 2 fast variant | $1.50 / $7.50 |
-| `cursor/claude-4-sonnet` | Claude 4 Sonnet via Cursor | varies |
-| `cursor/claude-4.5-sonnet` | Claude 4.5 Sonnet via Cursor | varies |
-| `cursor/claude-4.6-opus-high` | Claude 4.6 Opus via Cursor | varies |
-| `cursor/gpt-5.1` | GPT-5.1 via Cursor | varies |
-| `gpt-5.4` | GPT-5.4 | varies |
-| `cursor/gemini-3-flash` | Gemini 3 Flash via Cursor | varies |
-| `gemini-3-pro` | Gemini 3 Pro | varies |
-| `cursor/grok` | Grok via Cursor | varies |
-| `kimi-k2.5` | Moonshot Kimi K2.5 | varies |
+`model` is passed to `cursor-agent --model` as given, so every id the installed CLI accepts works — the current list and prices are on [cursor.com/docs/models-and-pricing](https://cursor.com/docs/models-and-pricing), and `cursor_models` returns what your CLI reports (`cursor-agent models`). `auto` (the default) lets Cursor choose. This README names no ids on purpose: Cursor adds and retires models faster than this package releases, and a list here was what made 1.0.x reject every current model.
 
 ### Modes
 
 | Mode | Description |
 |------|-------------|
 | `agent` | Full capabilities — file edit, terminal, search (default) |
-| `plan` | Design-focused — asks clarifying questions before acting |
+| `plan` | Read-only planning — analyses and proposes a plan, makes no edits (in headless mode a clarifying question cannot be answered) |
 | `ask` | Read-only exploration — no file modifications |
 
 ## Parallel Execution
@@ -142,9 +127,9 @@ Run multiple models simultaneously by making parallel tool calls:
 
 ```
 # In Claude Code, spawn 3 Agent subprocesses:
-Agent 1: cursor_agent with model=composer-2 → "Review this code"
-Agent 2: cursor_agent with model=cursor/claude-4-sonnet → "Review this code"
-Agent 3: cursor_agent with model=gpt-5.4 → "Review this code"
+Agent 1: cursor_agent with model=<a Composer id from cursor_models> → "Review this code"
+Agent 2: cursor_agent with model=<a Claude id from cursor_models> → "Review this code"
+Agent 3: cursor_agent with model=<a GPT id from cursor_models> → "Review this code"
 ```
 
 The built-in semaphore (default: 3) queues excess requests to prevent rate limit errors.
@@ -154,15 +139,16 @@ The built-in semaphore (default: 3) queues excess requests to prevent rate limit
 - **No shell execution** — `child_process.spawn` with argument arrays, preventing injection
 - **No credentials stored** — cursor-agent handles its own OAuth
 - **No HTTP requests** — pure CLI wrapper, no network access beyond cursor-agent
-- **Process cleanup** — AbortSignal kills child processes on client disconnect or timeout
-- **Auto-approve gated** — `--force` requires explicit `CURSOR_ALLOW_YOLO=true` env var, never controllable by LLMs
+- **Process cleanup** — the client's cancellation (the MCP request signal) and the timeout kill the child: SIGTERM, then SIGKILL after 5 s
+- **Auto-approve gated** — `--force` requires explicit `CURSOR_ALLOW_YOLO=true` env var, never controllable by LLMs; it applies to `cursor_agent` and `cursor_reply` alike
+- **Trusted workspace** — every call runs `cursor-agent --trust` on the given `workspace` (the server's cwd by default), so the agent is not prompted about the directory: point `workspace` only at directories you intend it to operate in
 - **Concurrency limited** — semaphore prevents resource exhaustion
 
 See [SECURITY.md](SECURITY.md) for full details.
 
 ## Supervised Coding Skill
 
-Optional [Claude Code skill](https://docs.anthropic.com/en/docs/claude-code) that lets Claude Code act as a **supervisor** while any Cursor model does the coding.
+Optional [Claude Code skill](https://code.claude.com/docs) that lets Claude Code act as a **supervisor** while any Cursor model does the coding.
 
 **How it works:** Claude Code analyzes the task, sends precise instructions to Cursor via `cursor_agent`, reviews the output by reading actual files from disk, and iterates with `cursor_reply` until satisfied (max 3 rounds).
 
@@ -171,12 +157,11 @@ Optional [Claude Code skill](https://docs.anthropic.com/en/docs/claude-code) tha
 ### Usage
 
 ```
-/cursor-code <task>                          # default: composer-2
-/cursor-code --model gpt-5.4 <task>          # explicit model
-/cursor-code --model cursor/grok <task>      # any model from cursor_models
+/cursor-code <task>                              # default: auto (Cursor chooses)
+/cursor-code --model <id> <task>                 # any id cursor_models lists
 ```
 
-Run `cursor_models` to list all available model IDs.
+Run `cursor_models` to list the ids your CLI offers.
 
 ### Install the skill
 
@@ -194,10 +179,10 @@ Create `~/.claude/skills/cursor-code/SKILL.md` with the following content:
 name: cursor-code
 description: Delegate coding to any Cursor model while Claude Code supervises.
   Use when user says "cursor-code", "delegate to cursor", "cursor code this",
-  or "/cursor-code". Supports all models from cursor_models (Composer 2, GPT 5.4,
-  Gemini 3.1 Pro, Grok 4.20, Claude 4.6 Sonnet, Kimi K2.5, etc.).
+  or "/cursor-code". Works with any model id cursor_models lists (the Composer,
+  Claude, GPT, Gemini and Grok families on your Cursor plan).
 metadata:
-  version: 1.0.0
+  version: 1.1.0
 ---
 
 # Supervised Coding: Claude Code (Supervisor) -> Cursor (Coder)
@@ -208,11 +193,11 @@ You give precise instructions, the coder writes code, you review and iterate.
 ## Parsing
 
 Extract from user input:
-- `--model <id>` -> model to use (default: `composer-2`)
+- `--model <id>` -> model to use (default: `auto`, Cursor chooses)
 - Everything else -> the task description
 
-If user says a model name naturally (e.g. "use gpt-5.4", "with gemini", "z grok"),
-extract it and map to the cursor_models ID.
+If user says a model name naturally (e.g. "use composer", "with gemini", "z grok"),
+extract it and map to an id from cursor_models.
 
 ## Workflow
 
@@ -223,7 +208,7 @@ extract it and map to the cursor_models ID.
 
 ### Step 2: Instruct
 Call `cursor_agent` with:
-- `model`: extracted model or `composer-2`
+- `model`: extracted model or `auto`
 - `workspace`: current working directory
 - `prompt`: precise instruction with file paths, function names, constraints
 - Keep prompt focused -- one task per call, not an entire feature
@@ -265,7 +250,7 @@ Summarize to the user:
 - If unsure about valid model IDs -- call cursor_models first
 ```
 
-<!-- Skill v1.0.0 — keep in sync with ~/.claude/skills/cursor-code/SKILL.md -->
+<!-- Skill v1.1.0 — keep in sync with ~/.claude/skills/cursor-code/SKILL.md -->
 </details>
 
 Restart Claude Code after creating the skill file.
@@ -280,7 +265,7 @@ npm run build
 node dist/index.js
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+See [CONTRIBUTING.md](https://github.com/qmediat/cursor-mcp/blob/main/CONTRIBUTING.md) for guidelines; `npm test` builds and runs the smoke and argv tests.
 
 
 ## Trademarks and affiliation

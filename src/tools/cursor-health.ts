@@ -1,6 +1,6 @@
 import { z } from "zod/v4";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { execute } from "../executor.js";
+import { execute, parseMaxConcurrency } from "../executor.js";
 import { which } from "../utils.js";
 import { CURSOR_BINARY } from "../types.js";
 
@@ -55,7 +55,7 @@ export async function handleCursorHealth(): Promise<CallToolResult> {
   }
 
   // Check 4: Concurrency config
-  const maxConcurrency = Number(process.env.CURSOR_MAX_CONCURRENCY) || 3;
+  const maxConcurrency = parseMaxConcurrency(process.env.CURSOR_MAX_CONCURRENCY);
   checks.push(`[INFO] Max concurrency: ${maxConcurrency} (CURSOR_MAX_CONCURRENCY)`);
 
   // Check 5: Yolo mode

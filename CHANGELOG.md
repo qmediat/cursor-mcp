@@ -2,8 +2,32 @@
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-01
+
+An audit of the npm page (2026-10-01, every claim checked against the code and against Cursor's documentation) found the
+server unusable with current Cursor models and several promises the code did not keep. Fixed:
+
+### Fixed
+
+- `model` is any id cursor-agent accepts (passed through to `--model`), no longer a closed list of ids from April 2026 that
+  rejected every current model (Composer 2.5, Claude Opus 5.5, Grok 4.7 …) before the CLI saw it. `auto` still lets Cursor
+  choose. A client's cancellation now reaches the child process: the SDK's request signal is passed to `spawn`, so a
+  disconnected or cancelled request kills cursor-agent instead of leaving it running on a semaphore slot. After SIGTERM a
+  child still alive 5 s later is sent SIGKILL (the behaviour SECURITY.md described). `cursor_reply` applies the same
+  `CURSOR_ALLOW_YOLO=true` → `--force` gate as `cursor_agent`, so an auto-approved session keeps applying its edits on
+  follow-ups (before, a reply only proposed them). `CURSOR_MAX_CONCURRENCY` must be a positive integer; anything else is the
+  default 3 (a negative value made every call queue forever). `cursor_models` strips the CLI's ANSI codes and treats
+  "No models available for this account" as an empty list; the fallback text names no prices (they are on
+  cursor.com/docs/models-and-pricing) and says how to list ids.
+
 ### Changed
 
+- README, SECURITY.md, the tool descriptions, `package.json` and `server.json` say what the code does: model families
+  instead of retired ids and prices, `agent login` (with `cursor-agent` as the alias the server resolves), the `cursor-mcp`
+  command and a `claude mcp add` one-liner, every call runs with `--trust` on the given workspace, the `cloud` flag is
+  experimental, "plan" is read-only planning, no "Business" plan, one response-time statement, absolute links.
+- Tests: `test/args.test.mjs` pins the argv of both tools, the open model contract, the concurrency parser and the models
+  cleaner; the smoke test asserts the model schema has no enum. Published JavaScript changes in this release.
 - `package.json` names the repository as `git+https://…` — the form npm publishes, so a publish prints no auto-correction.
 
 ## [1.0.3] - 2026-09-29
