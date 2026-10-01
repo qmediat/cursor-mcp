@@ -98,7 +98,7 @@ or by hand (below). `npm install -g @qmediat.io/cursor-mcp` installs the `cursor
 |----------|----------|---------|-------------|
 | `CURSOR_MAX_CONCURRENCY` | No | `3` | Maximum concurrent cursor-agent processes — an integer from 1 to 64; anything else is the default |
 | `CURSOR_ALLOW_YOLO` | No | `false` | `true` runs `cursor_agent` and `cursor_reply` with `--force` (auto-approve every tool call). Without it cursor-agent in headless mode only **proposes** file changes and applies none ([Cursor's headless docs](https://cursor.com/docs/cli/headless)). **DANGEROUS** — only for trusted environments, best with `CURSOR_SANDBOX=enabled` |
-| `CURSOR_SANDBOX` | No | the CLI's default | `enabled` or `disabled`, passed as `--sandbox <mode>`: the sandbox confines what an auto-approved agent may run; any other value is refused at the first call |
+| `CURSOR_SANDBOX` | No | the CLI's default | `enabled` or `disabled`, passed as `--sandbox <mode>`: the sandbox confines what an auto-approved agent may run; any other value ends the server at startup |
 | `CURSOR_KILL_GRACE_MS` | No | `5000` | After SIGTERM (timeout or cancellation), a child still alive this long is sent SIGKILL — an integer of milliseconds from 1 to 2147483647 (what a timer can wait); anything else is the default |
 
 ## Available Tools

@@ -62,6 +62,7 @@ test("cursor_agent reports the model, the files changed (once each) and the answ
   assert.equal(s.is_error, false);
   assert.equal(s.session_id, "s-1");
   assert.equal(s.request_id, "r-9");
+  assert.equal(s.exit_code, 0);
   assert.equal(s.model, "Composer 2.5");
   assert.equal(s.duration_ms, 1234);
   assert.equal(s.tool_calls, 8, "completed tool calls, started ones not counted twice");
@@ -174,6 +175,16 @@ test("a run that exits non-zero but printed a result event reports that result, 
   assert.equal(result.structuredContent.status, "error");
   assert.equal(result.structuredContent.result, "The model refused");
   assert.equal(result.structuredContent.session_id, "s-5");
+  assert.equal(result.structuredContent.exit_code, 1, "the CLI's exit code is reported beside the agent's result");
+  assert.ok(result.content[0].text.includes("Exit code: 1"));
+});
+
+test("a result event whose optional fields are null is still the result", async () => {
+  await writeFake([{ type: "result", subtype: null, is_error: null, duration_ms: null, duration_api_ms: null, result: "ok", session_id: "s-7", request_id: null }]);
+  const result = await handleCursorAgent({ prompt: "x" });
+  assert.equal(result.structuredContent.result, "ok");
+  assert.equal(result.structuredContent.status, "unknown");
+  assert.equal(result.structuredContent.exit_code, 0);
 });
 
 test("a lone init line is not a run's result; an init without a model still gives the session", async () => {
@@ -188,8 +199,9 @@ test("a stream cut before any assistant message: the stdout sample is the answer
   await writeFake(["Loading…", "error: the agent crashed"]);
   const result = await handleCursorAgent({ prompt: "x" });
   assert.equal(result.structuredContent.status, "no-result-event");
-  assert.equal(result.structuredContent.result, "Loading…\nerror: the agent crashed");
-  assert.ok(result.content[0].text.includes("Non-event stdout (sample):"));
+  assert.equal(result.structuredContent.result, "", "CLI noise is never presented as the agent's answer");
+  assert.deepEqual(result.structuredContent.noise_sample, ["Loading…", "error: the agent crashed"]);
+  assert.ok(result.content[0].text.includes("Non-event stdout (sample):\n  Loading…\n  error: the agent crashed"));
 });
 
 test("every progress notification has landed before the result returns, even a slow client", async () => {

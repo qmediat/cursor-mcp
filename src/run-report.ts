@@ -11,8 +11,9 @@ import { formatDuration } from "./utils.js";
 
 /** The structured result of cursor_agent and cursor_reply (`outputSchema`). */
 export const runReportSchema = z.object({
-  result: z.string().describe("The agent's final answer"),
-  status: z.string().describe("cursor-agent's result subtype: success, error, …"),
+  result: z.string().describe("The agent's final answer; without a result event, its last message, else empty (what stdout held is in noise_sample, never here)"),
+  status: z.string().describe("cursor-agent's result subtype: success, error, …; no-result-event when the run ended without one"),
+  exit_code: z.number().int().nullable().describe("cursor-agent's exit code (null when it was killed)"),
   is_error: z.boolean(),
   session_id: z.string().nullable().describe("The session to resume with cursor_reply"),
   request_id: z.string().nullable(),
@@ -115,15 +116,16 @@ export class RunObserver {
 export function buildReport(
   parsed: CursorResult | undefined,
   stderr: string,
+  exitCode: number | null,
   observer: RunObserver,
   fallbackSessionId?: string,
 ): RunReport {
   const ended = parsed !== undefined;
-  // without a result event: the last assistant message; failing that, what stdout held (the noise sample) — never nothing
-  const fallback = observer.lastAssistantText ?? (observer.noiseSample.length > 0 ? observer.noiseSample.join("\n") : "");
+  // without a result event: the last assistant message, else empty — the stdout sample is reported apart, never as the answer
   return {
-    result: parsed?.result ?? fallback,
+    result: parsed?.result ?? observer.lastAssistantText ?? "",
     status: ended ? (parsed.subtype ?? "unknown") : "no-result-event",
+    exit_code: exitCode,
     is_error: !ended || parsed.is_error === true || parsed.subtype === "error",
     session_id: parsed?.session_id ?? observer.initSessionId ?? fallbackSessionId ?? null,
     request_id: parsed?.request_id ?? null,
@@ -147,6 +149,7 @@ export function toCallToolResult(report: RunReport): CallToolResult {
   if (report.model) meta.push(`Model: ${report.model}`);
   if (report.duration_ms !== null) meta.push(`Duration: ${formatDuration(report.duration_ms)}`);
   if (report.status !== "success") meta.push(`Status: ${report.status}`);
+  if (report.exit_code !== 0) meta.push(`Exit code: ${report.exit_code ?? "killed"}`);
   if (report.tool_calls > 0) meta.push(`Tool calls: ${report.tool_calls}`);
   if (report.noise_lines > 0) meta.push(`Non-event stdout lines: ${report.noise_lines}`);
   if (report.noise_lines > 0 && report.status === "no-result-event") {

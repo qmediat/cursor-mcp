@@ -141,16 +141,11 @@ const SHUTDOWN_POLL_MS = 100;
 /** How much raw stdout is kept while streaming (the fallback when no result event arrives). */
 const MAX_RAW_STDOUT_BYTES = 1024 * 1024;
 
-/** A result event as the non-streaming result: `null` fields become absent. */
+/** A result event as the non-streaming result: every `null` field becomes absent. */
 function toCursorResult(event: ResultEvent): CursorResult {
-  const { type, result, request_id, session_id, ...rest } = event;
-  return {
-    type,
-    ...rest,
-    ...(result == null ? {} : { result }),
-    ...(request_id == null ? {} : { request_id }),
-    ...(session_id == null ? {} : { session_id }),
-  };
+  const { type, ...rest } = event;
+  const present = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== null && v !== undefined));
+  return CursorResultSchema.parse({ type, ...present });
 }
 
 /** The server entry point installs this once; a host that only imports the executor (a test) keeps its own signals. */
@@ -262,7 +257,7 @@ async function executeInternal(options: ExecuteOptions): Promise<ExecuteResult> 
     let stdoutBytes = 0;
     // an observer's failure — thrown or rejected — never fails the run
     const deliver = (event: StreamEvent): void => {
-      if (onEvent === undefined) return;
+      if (onEvent === undefined || settled) return; // nothing after the result: a lingering helper's output is not the run's
       try {
         void Promise.resolve(onEvent(event)).catch(() => undefined);
       } catch {

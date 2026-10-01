@@ -11,7 +11,7 @@ From the 2026-10-01 comparison with Cursor's own CLI, SDK and Cloud Agents API (
 - **The truth about headless edits.** Cursor's headless docs: without `--force`, changes are only proposed, not
   applied. The README, the tool description and SECURITY.md say so; the `agent` mode row no longer promises "file edit"
   by default. `CURSOR_SANDBOX=enabled|disabled` (operator environment) passes `--sandbox <mode>` so an auto-approved
-  agent can be confined; any other value is refused by name at the first call.
+  agent can be confined; any other value ends the server at startup, by name.
 - **Streaming.** Both agent tools run `--output-format stream-json`. Every event is parsed as it arrives
   (`src/stream.ts`): the terminal `result` is the run's result as before; a client that sent a progress token gets one
   `notifications/progress` per event (the model at start, each completed tool call with its target, each assistant

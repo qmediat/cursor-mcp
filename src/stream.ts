@@ -42,9 +42,13 @@ export const ToolCallEvent = z
 /** The terminal event; cursor-agent may send `null` where the non-streaming output omits a field. */
 export const ResultEvent = CursorResultSchema.extend({
   type: z.literal("result"),
+  subtype: z.string().nullable().optional(),
+  is_error: z.boolean().nullable().optional(),
+  duration_ms: z.number().nullable().optional(),
+  duration_api_ms: z.number().nullable().optional(),
   result: z.string().nullable().optional(),
-  request_id: z.string().nullable().optional(),
   session_id: z.string().nullable().optional(),
+  request_id: z.string().nullable().optional(),
 });
 export type ResultEvent = z.infer<typeof ResultEvent>;
 
@@ -91,19 +95,16 @@ export function summarizeToolCall(event: ToolCall): ToolCallSummary {
   return { name, target, writes: WRITE_KINDS.test(name), succeeded };
 }
 
-/** Splits a byte stream into lines and parses each as a stream-json event. A line that is not JSON (a stray log
- * line) is counted and passed to `onNoise`, never dropped silently; a JSON line that fits no shape is `OtherEvent`. */
 /** The longest line kept while waiting for its newline; past it the line is noise (a transcript, not an event). */
 export const MAX_LINE_BYTES = 8 * 1024 * 1024;
-/** How many noise lines are kept verbatim (the rest are counted). */
+/** How many noise lines a report keeps verbatim (the rest are counted). */
 export const NOISE_SAMPLE = 5;
 
+/** Splits a byte stream into lines and parses each as a stream-json event. A line that is not JSON (a stray log
+ * line) is counted and passed to `onNoise`, never dropped silently; a JSON line that fits no shape is `OtherEvent`. */
 export class NdjsonParser {
   private buffer = "";
   private readonly decoder = new StringDecoder("utf8"); // a multi-byte character may be split across chunks
-  /** The first few non-event lines, verbatim; `noiseCount` has them all. */
-  readonly noise: string[] = [];
-  noiseCount = 0;
 
   constructor(
     private readonly onEvent: (event: StreamEvent) => void,
@@ -147,8 +148,6 @@ export class NdjsonParser {
   }
 
   private noisy(text: string): void {
-    this.noiseCount += 1;
-    if (this.noise.length < NOISE_SAMPLE) this.noise.push(text.length > 500 ? `${text.slice(0, 500)}…` : text);
     this.onNoise?.(text);
   }
 }
