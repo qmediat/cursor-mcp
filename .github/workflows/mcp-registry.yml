@@ -85,6 +85,7 @@ jobs:
               echo "::notice::$tag has no server.json or package.json — left out"
               return 0
             fi
+            jq empty "$s" "$p" > /dev/null 2>&1 || { bad "$tag: its server.json or package.json is not JSON"; return; }
             name="$(field .name "$s")" pkg="$(field .name "$p")"
             if [ -z "$name" ] || [ "$(field .mcpName "$p")" != "$name" ]; then
               echo "::notice::$tag names no server with an mcpName (a release from before the registry) — left out"
@@ -110,9 +111,14 @@ jobs:
               404) ;;
               *) bad "the registry answered $code for $name $version"; return ;;
             esac
+            # written beside, moved in whole: the publish step never sees a half-written file
+            if ! jq --arg d "$description" '.description = $d' "$s" > "$RUNNER_TEMP/rewrite.json" 2> /dev/null \
+              || ! mv "$RUNNER_TEMP/rewrite.json" "$out/$(printf '%05d' "$((n + 1))")-$version.json"; then
+              rm -f "$RUNNER_TEMP/rewrite.json"
+              bad "$tag: its server.json cannot be rewritten"
+              return
+            fi
             n=$((n + 1))
-            jq --arg d "$description" '.description = $d' "$s" > "$out/$(printf '%05d' "$n")-$version.json" \
-              || { n=$((n - 1)); bad "$tag: its server.json cannot be rewritten"; return; }
             echo "to publish: $name $version"
           }
           [ -n "$tags" ] || echo "::notice::no published release yet — nothing published"
