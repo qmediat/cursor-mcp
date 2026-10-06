@@ -40,7 +40,7 @@ jobs:
   publish:
     name: Publish server.json
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     permissions:
       contents: read
@@ -61,60 +61,62 @@ jobs:
         run: |
           set -euo pipefail
           out="$RUNNER_TEMP/publish" n=0 errors=0 && mkdir -p "$out"
-          github() { # $1 api.github.com path, $2 file → the HTTP status (the only request that carries the token)
-            curl -sS --max-time 60 -o "$2" -w '%{http_code}' -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Accept: application/vnd.github+json" "https://api.github.com/$1"
-          }
-          public() { curl -sS --max-time 60 -o "$2" -w '%{http_code}' "$1"; } # $1 URL, $2 file → the HTTP status, no credential
-          bad() { echo "::error::$*"; errors=$((errors + 1)); } # said; the other releases go on, the run ends red
-          description="$(jq -r '.description // ""' server.json)" server="$(jq -r .name server.json)"
-          if [ -z "$description" ] || [ "${#description}" -gt 100 ]; then
-            echo "::error::the default branch's server.json description must be 1–100 characters (it is ${#description})"
+          # the probes never fail: a transport error is status 000, said by the caller; only api.github.com gets the token
+          github() { curl -sS --max-time 30 -o "$2" -w '%{http_code}' -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" "https://api.github.com/$1" || true; }
+          public() { curl -sS --max-time 20 -o "$2" -w '%{http_code}' "$1" || true; }
+          listed() { public "$REGISTRY/v0/servers/${1/\//%2F}/versions/$2" /dev/null; } # $1 name, $2 version → 200 / 404 / …
+          field() { jq -r "$1 // \"\"" "$2" 2> /dev/null || true; } # $1 jq path, $2 file → the value, empty when unreadable
+          declare -f public listed > "$RUNNER_TEMP/probes.sh"         # the publish step asks the same way
+          bad() { echo "::error::$*"; errors=$((errors + 1)); return 1; }
+          description="$(field .description server.json)" server="$(field .name server.json)"
+          if [ -z "$description" ] || [ "${#description}" -gt 100 ] || [ -z "$server" ]; then
+            echo "::error::the default branch's server.json needs a name and a 1–100 character description (it has ${#description})"
             exit 1
           fi
           code="$(github "repos/$REPO/releases?per_page=100" "$RUNNER_TEMP/releases.json")"
           [ "$code" = 200 ] || { echo "::error::GitHub answered $code for the releases"; exit 1; }
           tags="$(jq -r --argjson n "$RELEASES_SEEN" '[.[] | select((.draft | not) and (.prerelease | not)) | .tag_name][:$n] | reverse | .[]' \
-            "$RUNNER_TEMP/releases.json")"
-          [ -n "$tags" ] || echo "::notice::no published release yet — nothing published"
-          for tag in $tags; do
-            version="${tag#v}"
-            if ! git show "$tag:server.json" > "$RUNNER_TEMP/s.json" 2> /dev/null || ! git show "$tag:package.json" > "$RUNNER_TEMP/p.json" 2> /dev/null; then
+            "$RUNNER_TEMP/releases.json")" || { echo "::error::the releases cannot be read"; exit 1; }
+          # $1 tag → 0 planned or left out (said), 1 a problem (said by bad); every command is tested, none ends the loop
+          plan_tag() {
+            local tag="$1" version="${1#v}" s="$RUNNER_TEMP/s.json" p="$RUNNER_TEMP/p.json" name pkg code
+            if ! git show "$tag:server.json" > "$s" 2> /dev/null || ! git show "$tag:package.json" > "$p" 2> /dev/null; then
               echo "::notice::$tag has no server.json or package.json — left out"
-              continue
+              return 0
             fi
-            name="$(jq -r .name "$RUNNER_TEMP/s.json")" pkg="$(jq -r .name "$RUNNER_TEMP/p.json")"
-            if [ "$(jq -r '.mcpName // ""' "$RUNNER_TEMP/p.json")" != "$name" ]; then
-              echo "::notice::$tag's package.json names no mcpName $name (a release from before the registry) — left out"
-              continue
+            name="$(field .name "$s")" pkg="$(field .name "$p")"
+            if [ -z "$name" ] || [ "$(field .mcpName "$p")" != "$name" ]; then
+              echo "::notice::$tag names no server with an mcpName (a release from before the registry) — left out"
+              return 0
             fi
-            [ "$name" = "$server" ] || { bad "$tag is server $name, the default branch $server — publish it by hand"; continue; }
-            if [ "$(jq -r .version "$RUNNER_TEMP/s.json")" != "$version" ] || [ "$(jq -r .version "$RUNNER_TEMP/p.json")" != "$version" ]; then
+            [ "$name" = "$server" ] || { bad "$tag is server $name, the default branch $server — publish it by hand"; return; }
+            if [ "$(field .version "$s")" != "$version" ] || [ "$(field .version "$p")" != "$version" ]; then
               bad "$tag: server.json and package.json must both be version $version"
-              continue
+              return
             fi
-            if ! jq -e --arg v "$version" --arg p "$pkg" '(.packages | length) > 0 and all(.packages[]; .version == $v)
-              and any(.packages[]; .registryType == "npm" and .identifier == $p)' "$RUNNER_TEMP/s.json" > /dev/null; then
-              bad "$tag: every package in server.json must be version $version, one of them npm's $pkg"
-              continue
-            fi
+            jq -e --arg v "$version" --arg p "$pkg" '(.packages | length) > 0 and all(.packages[]; .version == $v)
+              and any(.packages[]; .registryType == "npm" and .identifier == $p)' "$s" > /dev/null 2>&1 \
+              || { bad "$tag: every package in server.json must be version $version, one of them npm's $pkg"; return; }
             code="$(public "https://registry.npmjs.org/${pkg/\//%2F}/$version" "$RUNNER_TEMP/npm.json")"
-            if [ "$code" = 404 ]; then
-              echo "::notice::npm does not serve $pkg@$version yet — not published now"
-              continue
-            fi
-            [ "$code" = 200 ] || { bad "npm answered $code for $pkg@$version"; continue; }
-            [ "$(jq -r '.mcpName // ""' "$RUNNER_TEMP/npm.json")" = "$name" ] || { bad "npm's $pkg@$version has no mcpName $name"; continue; }
-            code="$(public "$REGISTRY/v0/servers/${name/\//%2F}/versions/$version" /dev/null)"
-            if [ "$code" = 200 ]; then
-              echo "::notice::the registry already lists $name $version"
-              continue
-            fi
-            [ "$code" = 404 ] || { bad "the registry answered $code for $name $version"; continue; }
+            case "$code" in
+              404) echo "::notice::npm does not serve $pkg@$version yet — not published now"; return 0 ;;
+              200) [ "$(field .mcpName "$RUNNER_TEMP/npm.json")" = "$name" ] || { bad "npm's $pkg@$version has no mcpName $name"; return; } ;;
+              *) bad "npm answered $code for $pkg@$version"; return ;;
+            esac
+            code="$(listed "$name" "$version")"
+            case "$code" in
+              200) echo "::notice::the registry already lists $name $version"; return 0 ;;
+              404) ;;
+              *) bad "the registry answered $code for $name $version"; return ;;
+            esac
             n=$((n + 1))
-            jq --arg d "$description" '.description = $d' "$RUNNER_TEMP/s.json" > "$out/$(printf '%05d' "$n")-$version.json"
+            jq --arg d "$description" '.description = $d' "$s" > "$out/$(printf '%05d' "$n")-$version.json" \
+              || { n=$((n - 1)); bad "$tag: its server.json cannot be rewritten"; return; }
             echo "to publish: $name $version"
-          done
+          }
+          [ -n "$tags" ] || echo "::notice::no published release yet — nothing published"
+          for tag in $tags; do plan_tag "$tag" || true; done
           { echo "errors=$errors"; [ "$n" = 0 ] || echo "publish=true"; } >> "$GITHUB_OUTPUT"
 
       - name: Install mcp-publisher (pinned)
@@ -131,32 +133,35 @@ jobs:
         run: '"$RUNNER_TEMP/mcp-publisher" login github-oidc --registry "$REGISTRY"'
 
       - name: Publish, oldest first; each version listed afterwards
+        id: publish
         if: steps.plan.outputs.publish == 'true'
         run: |
           set -uo pipefail # the step shell is bash -e: every command that may fail below is tested, never left to end the loop
-          failed=0
+          . "$RUNNER_TEMP/probes.sh"
+          refused=0
           for f in "$RUNNER_TEMP"/publish/*.json; do
             name="$(jq -r .name "$f")" version="$(jq -r .version "$f")"
             if ! "$RUNNER_TEMP/mcp-publisher" publish "$f"; then
               echo "::error::the registry refused $name $version — the newer versions go on"
-              failed=$((failed + 1))
+              refused=$((refused + 1))
               continue
             fi
-            for wait in 0 5 10 20; do # the listing may trail the publish (35 s a version: ten fit the job's bound)
+            for wait in 0 5 10 20; do # the listing may trail the publish (35 s a version)
               sleep "$wait"
-              code="$(curl -sS --max-time 60 -o /dev/null -w '%{http_code}' "$REGISTRY/v0/servers/${name/\//%2F}/versions/$version")" || code=000
+              code="$(listed "$name" "$version")"
               [ "$code" != 200 ] || break
             done
             if [ "$code" = 200 ]; then echo "listed: $name $version"; else
               echo "::warning::$name $version published, not listed 35 s later (the registry answers $code) — the next run checks it"
             fi
           done
-          [ "$failed" = 0 ]
+          echo "refused=$refused" >> "$GITHUB_OUTPUT"
 
-      - name: A release could not be checked
-        if: always() && steps.plan.outputs.errors != '' && steps.plan.outputs.errors != '0'
+      - name: A release could not be checked or published
+        if: always() && (steps.plan.outputs.errors != '0' || (steps.publish.outputs.refused != '' && steps.publish.outputs.refused != '0'))
         env:
           ERRORS: ${{ steps.plan.outputs.errors }}
+          REFUSED: ${{ steps.publish.outputs.refused }}
         run: |
-          echo "::error::$ERRORS release(s) could not be checked or published — the errors above say which"
+          echo "::error::${ERRORS:-?} release(s) could not be checked, ${REFUSED:-0} publish(es) refused — the errors above say which"
           exit 1
