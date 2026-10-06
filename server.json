@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.qmediat/cursor-mcp",
-  "description": "Cursor CLI (cursor-agent) through MCP: run Cursor's agent with any model id your plan offers (Composer, Claude, GPT, Gemini, Grok families), resume sessions, list models.",
+  "description": "Cursor's agent (cursor-agent CLI) through MCP: any model your plan offers, resumable sessions.",
   "repository": {
     "url": "https://github.com/qmediat/cursor-mcp",
     "source": "github"

@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- `.github/workflows/mcp-registry.yml` keeps the official MCP Registry in step with the releases: every run (at a
+  release, at the end of the Release workflow, daily, by hand) publishes each of the last 10 releases that npm
+  serves and the registry lacks, oldest first — the `server.json` of its tag with the default branch's description
+  (GitHub Actions OIDC, no secret; `mcp-publisher` pinned by version and sha256). The registry listed an old version
+  of this server; the next run lists the missing ones.
+
+### Fixed
+
+- `server.json` `description` within the registry's 100-character limit (the registry refused the longer one).
+
 ## [1.2.0] - 2026-10-01
 
 From the 2026-10-01 comparison with Cursor's own CLI, SDK and Cloud Agents API (`docs/COMPETITION-2026-10-01.md`).
