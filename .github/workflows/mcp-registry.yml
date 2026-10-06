@@ -136,6 +136,10 @@ jobs:
           LISTING: ${{ steps.check.outputs.listing }}
         run: |
           set -euo pipefail
-          code="$(curl -sS --max-time 60 -o /dev/null -w '%{http_code}' "$LOOKUP")"
-          [ "$code" = 200 ] || { echo "::error::the registry answers $code for $LISTING after the publish"; exit 1; }
-          echo "listed: $LISTING"
+          for wait in 0 5 10 20 40; do # the listing may trail the publish by a moment
+            sleep "$wait"
+            code="$(curl -sS --max-time 60 -o /dev/null -w '%{http_code}' "$LOOKUP")"
+            [ "$code" != 200 ] || { echo "listed: $LISTING"; exit 0; }
+          done
+          echo "::error::the registry answers $code for $LISTING 75 s after the publish"
+          exit 1
