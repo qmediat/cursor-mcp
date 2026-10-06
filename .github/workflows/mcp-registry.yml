@@ -70,8 +70,9 @@ jobs:
           declare -f public listed > "$RUNNER_TEMP/probes.sh"         # the publish step asks the same way
           bad() { echo "::error::$*"; errors=$((errors + 1)); return 1; }
           description="$(field .description server.json)" server="$(field .name server.json)"
-          if [ -z "$description" ] || [ "${#description}" -gt 100 ] || [ -z "$server" ]; then
-            echo "::error::the default branch's server.json needs a name and a 1–100 character description (it has ${#description})"
+          chars="$(jq -r '(.description // "") | length' server.json 2> /dev/null || echo 0)" # characters, whatever the locale
+          if [ -z "$description" ] || [ "$chars" -gt 100 ] || [ -z "$server" ]; then
+            echo "::error::the default branch's server.json needs a name and a 1–100 character description (it has $chars)"
             exit 1
           fi
           code="$(github "repos/$REPO/releases?per_page=100" "$RUNNER_TEMP/releases.json")"
@@ -80,17 +81,18 @@ jobs:
             "$RUNNER_TEMP/releases.json")" || { echo "::error::the releases cannot be read"; exit 1; }
           # $1 tag → 0 planned or left out (said), 1 a problem (said by bad); every command is tested, none ends the loop
           plan_tag() {
-            local tag="$1" version="${1#v}" s="$RUNNER_TEMP/s.json" p="$RUNNER_TEMP/p.json" name pkg code
+            local tag="$1" version="${1#v}" s="$RUNNER_TEMP/s.json" p="$RUNNER_TEMP/p.json" name pkg mcp code
             if ! git show "$tag:server.json" > "$s" 2> /dev/null || ! git show "$tag:package.json" > "$p" 2> /dev/null; then
               echo "::notice::$tag has no server.json or package.json — left out"
               return 0
             fi
             jq empty "$s" "$p" > /dev/null 2>&1 || { bad "$tag: its server.json or package.json is not JSON"; return; }
-            name="$(field .name "$s")" pkg="$(field .name "$p")"
-            if [ -z "$name" ] || [ "$(field .mcpName "$p")" != "$name" ]; then
-              echo "::notice::$tag names no server with an mcpName (a release from before the registry) — left out"
+            name="$(field .name "$s")" pkg="$(field .name "$p")" mcp="$(field .mcpName "$p")"
+            if [ -z "$mcp" ]; then
+              echo "::notice::$tag's package.json has no mcpName (a release from before the registry) — left out"
               return 0
             fi
+            [ "$mcp" = "$name" ] || { bad "$tag: package.json's mcpName $mcp is not server.json's name ${name:-(none)}"; return; }
             [ "$name" = "$server" ] || { bad "$tag is server $name, the default branch $server — publish it by hand"; return; }
             if [ "$(field .version "$s")" != "$version" ] || [ "$(field .version "$p")" != "$version" ]; then
               bad "$tag: server.json and package.json must both be version $version"
