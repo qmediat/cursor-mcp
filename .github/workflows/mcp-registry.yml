@@ -84,10 +84,13 @@ jobs:
               echo "::notice::$tag's package.json names no mcpName $name (a release from before the registry) — left out"
               continue
             fi
-            if [ "$(jq -r .version "$RUNNER_TEMP/s.json")" != "$version" ] || [ "$(jq -r .version "$RUNNER_TEMP/p.json")" != "$version" ] \
-              || ! jq -e --arg v "$version" --arg p "$pkg" '(.packages | length) > 0 and all(.packages[]; .version == $v)
-                and any(.packages[]; .registryType == "npm" and .identifier == $p)' "$RUNNER_TEMP/s.json" > /dev/null; then
-              echo "::error::$tag: its server.json ($name) and package.json ($pkg) do not both name version $version"
+            if [ "$(jq -r .version "$RUNNER_TEMP/s.json")" != "$version" ] || [ "$(jq -r .version "$RUNNER_TEMP/p.json")" != "$version" ]; then
+              echo "::error::$tag: server.json and package.json must both be version $version"
+              exit 1
+            fi
+            if ! jq -e --arg v "$version" --arg p "$pkg" '(.packages | length) > 0 and all(.packages[]; .version == $v)
+              and any(.packages[]; .registryType == "npm" and .identifier == $p)' "$RUNNER_TEMP/s.json" > /dev/null; then
+              echo "::error::$tag: every package in server.json must be version $version, one of them npm's $pkg"
               exit 1
             fi
             [ "$(jq -r .name server.json)" = "$name" ] || { echo "::error::the default branch renames $name — publish by hand"; exit 1; }
@@ -130,12 +133,12 @@ jobs:
           for f in "$RUNNER_TEMP"/publish/*.json; do
             name="$(jq -r .name "$f")" version="$(jq -r .version "$f")"
             "$RUNNER_TEMP/mcp-publisher" publish "$f"
-            for wait in 0 5 10 20 40 60; do # the listing may trail the publish
+            for wait in 0 5 10 20; do # the listing may trail the publish (35 s a version: ten fit the job's bound)
               sleep "$wait"
               code="$(curl -sS --max-time 60 -o /dev/null -w '%{http_code}' "$REGISTRY/v0/servers/${name/\//%2F}/versions/$version")"
               [ "$code" != 200 ] || break
             done
             if [ "$code" = 200 ]; then echo "listed: $name $version"; else
-              echo "::warning::$name $version published, not listed yet (the registry answers $code) — the next run checks it"
+              echo "::warning::$name $version published, not listed 35 s later (the registry answers $code) — the next run checks it"
             fi
           done
