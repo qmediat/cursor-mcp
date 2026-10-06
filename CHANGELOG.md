@@ -14,6 +14,12 @@
 
 - `server.json` `description` within the registry's 100-character limit (the registry refused the longer one).
 
+### Security
+
+- `@modelcontextprotocol/sdk` 1.32.0 (was 1.30.1), past GHSA-6qxp-vccf-f47h (fixed in 1.31.0: the SDK's OAuth client
+  could send credentials to an authorization server the MCP server chose). This server runs over stdio and imports only
+  the SDK's server side, so it never used that client; the bump clears `npm audit`.
+
 ## [1.2.0] - 2026-10-01
 
 From the 2026-10-01 comparison with Cursor's own CLI, SDK and Cloud Agents API (`docs/COMPETITION-2026-10-01.md`).
