@@ -1,16 +1,16 @@
 name: MCP Registry
 
 # Keeps the official MCP Registry (registry.modelcontextprotocol.io) in step with the releases: every run looks at the
-# last RELEASES_SEEN published GitHub Releases (drafts and prereleases left out) and publishes each version npm serves
-# and the registry does not list yet, oldest first — so a version whose npm approval comes after a later release, or
-# after the default branch moved on, is still published by the next run. Each is the server.json of its own tag with
-# the default branch's description (presentation only, checked against the registry's 100-character limit; a version
-# the registry lists cannot be changed, so a corrected description reaches the versions published after it).
+# newest RELEASES_SEEN published GitHub Releases (drafts and prereleases left out before counting) and publishes each
+# version npm serves and the registry does not list yet, oldest first — so a version whose npm approval comes after a
+# later release, or after the default branch moved on, is still published by the next run. Each is the server.json of its
+# own tag with the default branch's description (presentation only, checked against the registry's 100-character limit;
+# a version the registry lists cannot be changed, so a corrected description reaches the versions published after it).
 # Triggers: a release published, the Release workflow completed, a daily schedule (it reaches the registry after a
 # maintainer approves a staged npm version, which fires no event) and by hand.
-# Green with a notice: nothing to publish (no release yet, npm does not serve a version yet, the registry lists it, a
-# release from before this server had an mcpName). Red: a default-branch description the registry would refuse, a tag
-# whose server.json and package.json disagree, any answer that cannot be read, a publish that fails.
+# One bad release never holds the others: a tag whose manifests disagree, an answer that cannot be read or a refused
+# publish is said as an error, the rest go on, and the run ends red once they are done. Green with a notice: nothing to
+# publish. The GitHub token goes to api.github.com only; npm and the registry are read without credentials.
 # Login is GitHub Actions OIDC: the registry grants io.github.<repository owner>/* to the token, so no secret exists.
 # mcp-publisher is pinned by version and by the sha256 of its release tarball (raised by hand, as the npm pin is).
 
@@ -60,18 +60,22 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          out="$RUNNER_TEMP/publish" n=0 && mkdir -p "$out"
-          get() { # $1 URL, $2 file → the HTTP status, the body in the file (a failed connection ends the run)
-            curl -sS --max-time 60 -o "$2" -w '%{http_code}' -H "Authorization: Bearer $GH_TOKEN" "$1"
+          out="$RUNNER_TEMP/publish" n=0 errors=0 && mkdir -p "$out"
+          github() { # $1 api.github.com path, $2 file → the HTTP status (the only request that carries the token)
+            curl -sS --max-time 60 -o "$2" -w '%{http_code}' -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" "https://api.github.com/$1"
           }
-          description="$(jq -r '.description // ""' server.json)"
+          public() { curl -sS --max-time 60 -o "$2" -w '%{http_code}' "$1"; } # $1 URL, $2 file → the HTTP status, no credential
+          bad() { echo "::error::$*"; errors=$((errors + 1)); } # said; the other releases go on, the run ends red
+          description="$(jq -r '.description // ""' server.json)" server="$(jq -r .name server.json)"
           if [ -z "$description" ] || [ "${#description}" -gt 100 ]; then
             echo "::error::the default branch's server.json description must be 1–100 characters (it is ${#description})"
             exit 1
           fi
-          code="$(get "https://api.github.com/repos/$REPO/releases?per_page=$RELEASES_SEEN" "$RUNNER_TEMP/releases.json")"
+          code="$(github "repos/$REPO/releases?per_page=100" "$RUNNER_TEMP/releases.json")"
           [ "$code" = 200 ] || { echo "::error::GitHub answered $code for the releases"; exit 1; }
-          tags="$(jq -r '[.[] | select((.draft | not) and (.prerelease | not)) | .tag_name] | reverse | .[]' "$RUNNER_TEMP/releases.json")"
+          tags="$(jq -r --argjson n "$RELEASES_SEEN" '[.[] | select((.draft | not) and (.prerelease | not)) | .tag_name][:$n] | reverse | .[]' \
+            "$RUNNER_TEMP/releases.json")"
           [ -n "$tags" ] || echo "::notice::no published release yet — nothing published"
           for tag in $tags; do
             version="${tag#v}"
@@ -84,34 +88,34 @@ jobs:
               echo "::notice::$tag's package.json names no mcpName $name (a release from before the registry) — left out"
               continue
             fi
+            [ "$name" = "$server" ] || { bad "$tag is server $name, the default branch $server — publish it by hand"; continue; }
             if [ "$(jq -r .version "$RUNNER_TEMP/s.json")" != "$version" ] || [ "$(jq -r .version "$RUNNER_TEMP/p.json")" != "$version" ]; then
-              echo "::error::$tag: server.json and package.json must both be version $version"
-              exit 1
+              bad "$tag: server.json and package.json must both be version $version"
+              continue
             fi
             if ! jq -e --arg v "$version" --arg p "$pkg" '(.packages | length) > 0 and all(.packages[]; .version == $v)
               and any(.packages[]; .registryType == "npm" and .identifier == $p)' "$RUNNER_TEMP/s.json" > /dev/null; then
-              echo "::error::$tag: every package in server.json must be version $version, one of them npm's $pkg"
-              exit 1
+              bad "$tag: every package in server.json must be version $version, one of them npm's $pkg"
+              continue
             fi
-            [ "$(jq -r .name server.json)" = "$name" ] || { echo "::error::the default branch renames $name — publish by hand"; exit 1; }
-            code="$(get "https://registry.npmjs.org/${pkg/\//%2F}/$version" "$RUNNER_TEMP/npm.json")"
+            code="$(public "https://registry.npmjs.org/${pkg/\//%2F}/$version" "$RUNNER_TEMP/npm.json")"
             if [ "$code" = 404 ]; then
               echo "::notice::npm does not serve $pkg@$version yet — not published now"
               continue
             fi
-            [ "$code" = 200 ] || { echo "::error::npm answered $code for $pkg@$version"; exit 1; }
-            [ "$(jq -r '.mcpName // ""' "$RUNNER_TEMP/npm.json")" = "$name" ] || { echo "::error::npm's $pkg@$version has no mcpName $name"; exit 1; }
-            code="$(curl -sS --max-time 60 -o /dev/null -w '%{http_code}' "$REGISTRY/v0/servers/${name/\//%2F}/versions/$version")"
+            [ "$code" = 200 ] || { bad "npm answered $code for $pkg@$version"; continue; }
+            [ "$(jq -r '.mcpName // ""' "$RUNNER_TEMP/npm.json")" = "$name" ] || { bad "npm's $pkg@$version has no mcpName $name"; continue; }
+            code="$(public "$REGISTRY/v0/servers/${name/\//%2F}/versions/$version" /dev/null)"
             if [ "$code" = 200 ]; then
               echo "::notice::the registry already lists $name $version"
               continue
             fi
-            [ "$code" = 404 ] || { echo "::error::the registry answered $code for $name $version"; exit 1; }
+            [ "$code" = 404 ] || { bad "the registry answered $code for $name $version"; continue; }
             n=$((n + 1))
             jq --arg d "$description" '.description = $d' "$RUNNER_TEMP/s.json" > "$out/$(printf '%05d' "$n")-$version.json"
             echo "to publish: $name $version"
           done
-          [ "$n" = 0 ] || echo "publish=true" >> "$GITHUB_OUTPUT"
+          { echo "errors=$errors"; [ "$n" = 0 ] || echo "publish=true"; } >> "$GITHUB_OUTPUT"
 
       - name: Install mcp-publisher (pinned)
         if: steps.plan.outputs.publish == 'true'
@@ -129,16 +133,30 @@ jobs:
       - name: Publish, oldest first; each version listed afterwards
         if: steps.plan.outputs.publish == 'true'
         run: |
-          set -euo pipefail
+          set -uo pipefail # the step shell is bash -e: every command that may fail below is tested, never left to end the loop
+          failed=0
           for f in "$RUNNER_TEMP"/publish/*.json; do
             name="$(jq -r .name "$f")" version="$(jq -r .version "$f")"
-            "$RUNNER_TEMP/mcp-publisher" publish "$f"
+            if ! "$RUNNER_TEMP/mcp-publisher" publish "$f"; then
+              echo "::error::the registry refused $name $version — the newer versions go on"
+              failed=$((failed + 1))
+              continue
+            fi
             for wait in 0 5 10 20; do # the listing may trail the publish (35 s a version: ten fit the job's bound)
               sleep "$wait"
-              code="$(curl -sS --max-time 60 -o /dev/null -w '%{http_code}' "$REGISTRY/v0/servers/${name/\//%2F}/versions/$version")"
+              code="$(curl -sS --max-time 60 -o /dev/null -w '%{http_code}' "$REGISTRY/v0/servers/${name/\//%2F}/versions/$version")" || code=000
               [ "$code" != 200 ] || break
             done
             if [ "$code" = 200 ]; then echo "listed: $name $version"; else
               echo "::warning::$name $version published, not listed 35 s later (the registry answers $code) — the next run checks it"
             fi
           done
+          [ "$failed" = 0 ]
+
+      - name: A release could not be checked
+        if: always() && steps.plan.outputs.errors != '' && steps.plan.outputs.errors != '0'
+        env:
+          ERRORS: ${{ steps.plan.outputs.errors }}
+        run: |
+          echo "::error::$ERRORS release(s) could not be checked or published — the errors above say which"
+          exit 1
