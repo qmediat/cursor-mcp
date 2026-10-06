@@ -1,15 +1,16 @@
 name: MCP Registry
 
-# Publishes the latest published GitHub Release (a draft or a prerelease is never the latest) to the official MCP
-# Registry (registry.modelcontextprotocol.io) once npm serves its version: the server.json of the release's own tag, with
-# the description of the default branch (presentation only, so a corrected one reaches the next version the registry
-# gets; a version the registry lists cannot be changed). A default branch already ahead of that release blocks nothing.
-# Triggers: a release published, the Release workflow completed, a daily schedule and by hand. The schedule is what
-# reaches the registry after a maintainer approves a staged npm version, whichever order the release flow publishes in
-# (a GitHub Release published before npm stages sees npm answer 404 at both other triggers).
-# Idempotent: no published release yet, a version npm does not serve, or one the registry already lists ends the run
-# green with a notice; a tag whose server.json and package.json disagree, a renamed server, or any answer that cannot
-# be read ends it red.
+# Keeps the official MCP Registry (registry.modelcontextprotocol.io) in step with the releases: every run looks at the
+# last RELEASES_SEEN published GitHub Releases (drafts and prereleases left out) and publishes each version npm serves
+# and the registry does not list yet, oldest first — so a version whose npm approval comes after a later release, or
+# after the default branch moved on, is still published by the next run. Each is the server.json of its own tag with
+# the default branch's description (presentation only, checked against the registry's 100-character limit; a version
+# the registry lists cannot be changed, so a corrected description reaches the versions published after it).
+# Triggers: a release published, the Release workflow completed, a daily schedule (it reaches the registry after a
+# maintainer approves a staged npm version, which fires no event) and by hand.
+# Green with a notice: nothing to publish (no release yet, npm does not serve a version yet, the registry lists it, a
+# release from before this server had an mcpName). Red: a default-branch description the registry would refuse, a tag
+# whose server.json and package.json disagree, any answer that cannot be read, a publish that fails.
 # Login is GitHub Actions OIDC: the registry grants io.github.<repository owner>/* to the token, so no secret exists.
 # mcp-publisher is pinned by version and by the sha256 of its release tarball (raised by hand, as the npm pin is).
 
@@ -33,87 +34,84 @@ env:
   PUBLISHER_VERSION: "1.8.1"
   PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
   REGISTRY: https://registry.modelcontextprotocol.io
+  RELEASES_SEEN: "10"
 
 jobs:
   publish:
     name: Publish server.json
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     permissions:
       contents: read
       id-token: write
     steps:
-      - name: The latest published release
-        id: release
+      - name: The default branch, with its tags
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch || github.ref_name }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: The versions to publish
+        id: plan
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          code="$(curl -sS --max-time 60 -o "$RUNNER_TEMP/release.json" -w '%{http_code}' -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPO/releases/latest")"
-          if [ "$code" = 404 ]; then
-            echo "::notice::no published release yet — nothing published"
-            exit 0
-          fi
-          [ "$code" = 200 ] || { echo "::error::GitHub answered $code for the latest release"; exit 1; }
-          tag="$(jq -r '.tag_name // ""' "$RUNNER_TEMP/release.json")"
-          [ -n "$tag" ] || { echo "::error::the latest release has no tag"; exit 1; }
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-
-      - name: The default branch (the description)
-        if: steps.release.outputs.tag != ''
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.repository.default_branch || github.ref_name }}
-          persist-credentials: false
-
-      - name: The release's tag (server.json and package.json of the version)
-        if: steps.release.outputs.tag != ''
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: refs/tags/${{ steps.release.outputs.tag }}
-          path: tagged
-          persist-credentials: false
-
-      - name: The tag's manifests agree; npm serves the version; the registry lacks it
-        id: check
-        if: steps.release.outputs.tag != ''
-        env:
-          TAG: ${{ steps.release.outputs.tag }}
-        run: |
-          set -euo pipefail
-          version="${TAG#v}" name="$(jq -r .name tagged/server.json)"
-          pkg="$(jq -r .name tagged/package.json)" mcp="$(jq -r '.mcpName // ""' tagged/package.json)"
-          if [ "$(jq -r .version tagged/server.json)" != "$version" ] || [ "$(jq -r .version tagged/package.json)" != "$version" ] \
-            || ! jq -e --arg v "$version" --arg p "$pkg" '(.packages | length) > 0 and all(.packages[]; .version == $v)
-              and any(.packages[]; .registryType == "npm" and .identifier == $p)' tagged/server.json > /dev/null \
-            || [ "$mcp" != "$name" ]; then
-            echo "::error::$TAG: its server.json ($name) and package.json ($pkg, mcpName $mcp) do not both name version $version"
+          out="$RUNNER_TEMP/publish" n=0 && mkdir -p "$out"
+          get() { # $1 URL, $2 file → the HTTP status, the body in the file (a failed connection ends the run)
+            curl -sS --max-time 60 -o "$2" -w '%{http_code}' -H "Authorization: Bearer $GH_TOKEN" "$1"
+          }
+          description="$(jq -r '.description // ""' server.json)"
+          if [ -z "$description" ] || [ "${#description}" -gt 100 ]; then
+            echo "::error::the default branch's server.json description must be 1–100 characters (it is ${#description})"
             exit 1
           fi
-          [ "$(jq -r .name server.json)" = "$name" ] || { echo "::error::the default branch renames the server — publish by hand"; exit 1; }
-          # 404 = not public yet (a staged version waits for its approval); any other failure is said and ends the run
-          code="$(curl -sS --max-time 60 -o "$RUNNER_TEMP/npm.json" -w '%{http_code}' "https://registry.npmjs.org/${pkg/\//%2F}/$version")"
-          if [ "$code" = 404 ]; then
-            echo "::notice::npm does not serve $pkg@$version yet — nothing published"
-            exit 0
-          fi
-          [ "$code" = 200 ] || { echo "::error::npm answered $code for $pkg@$version"; exit 1; }
-          [ "$(jq -r '.mcpName // ""' "$RUNNER_TEMP/npm.json")" = "$name" ] || { echo "::error::npm's $pkg@$version has no mcpName $name"; exit 1; }
-          lookup="$REGISTRY/v0/servers/${name/\//%2F}/versions/$version"
-          code="$(curl -sS --max-time 60 -o /dev/null -w '%{http_code}' "$lookup")"
-          if [ "$code" = 200 ]; then
-            echo "::notice::the registry already lists $name $version"
-            exit 0
-          fi
-          [ "$code" = 404 ] || { echo "::error::the registry answered $code for $name $version"; exit 1; }
-          jq --arg d "$(jq -r .description server.json)" '.description = $d' tagged/server.json > "$RUNNER_TEMP/publish.json"
-          { echo "lookup=$lookup"; echo "listing=$name $version"; echo "publish=true"; } >> "$GITHUB_OUTPUT"
+          code="$(get "https://api.github.com/repos/$REPO/releases?per_page=$RELEASES_SEEN" "$RUNNER_TEMP/releases.json")"
+          [ "$code" = 200 ] || { echo "::error::GitHub answered $code for the releases"; exit 1; }
+          tags="$(jq -r '[.[] | select((.draft | not) and (.prerelease | not)) | .tag_name] | reverse | .[]' "$RUNNER_TEMP/releases.json")"
+          [ -n "$tags" ] || echo "::notice::no published release yet — nothing published"
+          for tag in $tags; do
+            version="${tag#v}"
+            if ! git show "$tag:server.json" > "$RUNNER_TEMP/s.json" 2> /dev/null || ! git show "$tag:package.json" > "$RUNNER_TEMP/p.json" 2> /dev/null; then
+              echo "::notice::$tag has no server.json or package.json — left out"
+              continue
+            fi
+            name="$(jq -r .name "$RUNNER_TEMP/s.json")" pkg="$(jq -r .name "$RUNNER_TEMP/p.json")"
+            if [ "$(jq -r '.mcpName // ""' "$RUNNER_TEMP/p.json")" != "$name" ]; then
+              echo "::notice::$tag's package.json names no mcpName $name (a release from before the registry) — left out"
+              continue
+            fi
+            if [ "$(jq -r .version "$RUNNER_TEMP/s.json")" != "$version" ] || [ "$(jq -r .version "$RUNNER_TEMP/p.json")" != "$version" ] \
+              || ! jq -e --arg v "$version" --arg p "$pkg" '(.packages | length) > 0 and all(.packages[]; .version == $v)
+                and any(.packages[]; .registryType == "npm" and .identifier == $p)' "$RUNNER_TEMP/s.json" > /dev/null; then
+              echo "::error::$tag: its server.json ($name) and package.json ($pkg) do not both name version $version"
+              exit 1
+            fi
+            [ "$(jq -r .name server.json)" = "$name" ] || { echo "::error::the default branch renames $name — publish by hand"; exit 1; }
+            code="$(get "https://registry.npmjs.org/${pkg/\//%2F}/$version" "$RUNNER_TEMP/npm.json")"
+            if [ "$code" = 404 ]; then
+              echo "::notice::npm does not serve $pkg@$version yet — not published now"
+              continue
+            fi
+            [ "$code" = 200 ] || { echo "::error::npm answered $code for $pkg@$version"; exit 1; }
+            [ "$(jq -r '.mcpName // ""' "$RUNNER_TEMP/npm.json")" = "$name" ] || { echo "::error::npm's $pkg@$version has no mcpName $name"; exit 1; }
+            code="$(curl -sS --max-time 60 -o /dev/null -w '%{http_code}' "$REGISTRY/v0/servers/${name/\//%2F}/versions/$version")"
+            if [ "$code" = 200 ]; then
+              echo "::notice::the registry already lists $name $version"
+              continue
+            fi
+            [ "$code" = 404 ] || { echo "::error::the registry answered $code for $name $version"; exit 1; }
+            n=$((n + 1))
+            jq --arg d "$description" '.description = $d' "$RUNNER_TEMP/s.json" > "$out/$(printf '%05d' "$n")-$version.json"
+            echo "to publish: $name $version"
+          done
+          [ "$n" = 0 ] || echo "publish=true" >> "$GITHUB_OUTPUT"
 
       - name: Install mcp-publisher (pinned)
-        if: steps.check.outputs.publish == 'true'
+        if: steps.plan.outputs.publish == 'true'
         run: |
           set -euo pipefail
           curl -fsSL --max-time 120 -o "$RUNNER_TEMP/mcp-publisher.tar.gz" \
@@ -122,24 +120,22 @@ jobs:
           tar -xzf "$RUNNER_TEMP/mcp-publisher.tar.gz" -C "$RUNNER_TEMP" mcp-publisher
 
       - name: Log in (GitHub Actions OIDC)
-        if: steps.check.outputs.publish == 'true'
+        if: steps.plan.outputs.publish == 'true'
         run: '"$RUNNER_TEMP/mcp-publisher" login github-oidc --registry "$REGISTRY"'
 
-      - name: Publish
-        if: steps.check.outputs.publish == 'true'
-        run: '"$RUNNER_TEMP/mcp-publisher" publish "$RUNNER_TEMP/publish.json"'
-
-      - name: The registry lists the version
-        if: steps.check.outputs.publish == 'true'
-        env:
-          LOOKUP: ${{ steps.check.outputs.lookup }}
-          LISTING: ${{ steps.check.outputs.listing }}
+      - name: Publish, oldest first; each version listed afterwards
+        if: steps.plan.outputs.publish == 'true'
         run: |
           set -euo pipefail
-          for wait in 0 5 10 20 40; do # the listing may trail the publish by a moment
-            sleep "$wait"
-            code="$(curl -sS --max-time 60 -o /dev/null -w '%{http_code}' "$LOOKUP")"
-            [ "$code" != 200 ] || { echo "listed: $LISTING"; exit 0; }
+          for f in "$RUNNER_TEMP"/publish/*.json; do
+            name="$(jq -r .name "$f")" version="$(jq -r .version "$f")"
+            "$RUNNER_TEMP/mcp-publisher" publish "$f"
+            for wait in 0 5 10 20 40 60; do # the listing may trail the publish
+              sleep "$wait"
+              code="$(curl -sS --max-time 60 -o /dev/null -w '%{http_code}' "$REGISTRY/v0/servers/${name/\//%2F}/versions/$version")"
+              [ "$code" != 200 ] || break
+            done
+            if [ "$code" = 200 ]; then echo "listed: $name $version"; else
+              echo "::warning::$name $version published, not listed yet (the registry answers $code) — the next run checks it"
+            fi
           done
-          echo "::error::the registry answers $code for $LISTING 75 s after the publish"
-          exit 1
