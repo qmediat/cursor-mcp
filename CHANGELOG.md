@@ -4,10 +4,10 @@
 
 ### Added
 
-- `.github/workflows/mcp-registry.yml` publishes `server.json` to the official MCP Registry after every release —
-  at the release, at the end of the Release workflow, or at the daily run once npm serves the approved version
-  (GitHub Actions OIDC, no secret; `mcp-publisher` pinned by version and sha256). The registry listed an old
-  version of this server; the next run lists the current one.
+- `.github/workflows/mcp-registry.yml` publishes every release to the official MCP Registry — the `server.json` of
+  the release's tag with the default branch's description — at the release, at the end of the Release workflow, or
+  at the daily run once npm serves the approved version (GitHub Actions OIDC, no secret; `mcp-publisher` pinned by
+  version and sha256). The registry listed an old version of this server; the next run lists the current one.
 
 ### Fixed
 
