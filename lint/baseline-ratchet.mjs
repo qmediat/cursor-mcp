@@ -4,25 +4,27 @@
 //
 //   node lint/baseline-ratchet.mjs [--base <ref>] [--duplicates <jscpd-report.json>]
 //     Compares every tracked baseline with the base branch (--base, else $BASELINE_RATCHET_BASE — a release job sets
-//     HEAD: the tag's tree was checked on its pull request —, else origin/$GITHUB_BASE_REF in a pull request, else
-//     origin/main) and fails when an entry appeared or a count rose — `eslint --suppress-all` and a regenerated
+//     HEAD: the tag's tree was checked on its pull request —, else origin/$GITHUB_BASE_REF in a pull request, else the
+//     commit a push moved the branch from (GitHub's push event), else origin/main) and fails when an entry appeared or a count rose — `eslint --suppress-all` and a regenerated
 //     rubocop todo would otherwise hide a new violation. A baseline the base branch does not have is an adoption.
 //     With --duplicates, jscpd's report must measure exactly the duplicated lines `jscpd-baseline.json` records: more
 //     is a new repeat, fewer asks for the baseline to be lowered (--write-duplicates), no file analyzed is "cannot tell".
 //   node lint/baseline-ratchet.mjs --write-duplicates <jscpd-report.json>   records the measured duplicated lines
-//   node lint/baseline-ratchet.mjs --counts           every baseline's size, as JSON (exit 2 when one is unreadable)
-// Every run also holds the vendored preset files (lint/structure.mjs, lint/baseline-ratchet.mjs) to
-// lint/presets.sha256, the presets' own list copied beside them: a file edited here is refused.
+//   node lint/baseline-ratchet.mjs --counts           {sizes: every kind's size, unreadable: [...]} as JSON (exit 2 when
+//                                                     one is unreadable)
+//   Any other argument (`--fix` through `npm run lint --`, `--duplicates=<report>`) is a usage error, exit 2.
+// Every check (not --counts, not --write-duplicates) also holds the vendored preset files under lint/ of the directory
+// it runs in to lint/presets.sha256, the presets' own list copied beside them: a file edited here is refused.
 // Exit: 0 clean, 1 a baseline grew or does not hold, 2 cannot tell (no base ref, an unreadable file or report).
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { isAbsolute, posix, relative } from "node:path";
+import { isAbsolute, posix, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const DUPLICATES = "jscpd-baseline.json";
 export const LOCK = "lint/presets.sha256";
-const VENDORED = ["lint/structure.mjs", "lint/baseline-ratchet.mjs"];
+export const VENDORED = ["lint/structure.mjs", "lint/baseline-ratchet.mjs", "lint/rubocop-structure.yml", "lint/rubocop-rspec.yml"];
 
 /** @param {...string} args */
 const git = (...args) =>
@@ -38,6 +40,11 @@ function countOf(value, where) {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) throw new Error(`${where}: not a count`);
   return value;
 }
+
+/** @param {Map<string, number>} entries @returns {number} */
+const sum = (entries) => [...entries.values()].reduce((all, value) => all + value, 0);
+/** @param {Map<string, number>} entries @returns {number} */
+const size = (entries) => entries.size;
 
 // An entry's key holds the file it is about and what is recorded for it, apart: a rename moves the file and nothing
 // else, whatever characters the path has. The file is relative to the baseline's root; "" when no file carries it.
@@ -74,20 +81,23 @@ const unquote = (item) => item.trim().replace(/^['"]|['"]$/g, "");
  * @returns {{ kind: string, values: string[] }}
  */
 function rubocopLine(raw) {
-  const line = raw.replace(/\s+#.*$/, "");
-  const header = /^([A-Z]\w*\/\w+):\s*$/.exec(line);
+  const line = raw.replace(/(^|\s+)#.*$/, "");
+  if (line.trim() === "" || /^\s+Exclude:\s*$/.test(line)) return { kind: "other", values: [] };
+  const header = /^([A-Z]\w*(?:\/\w+)+):\s*$/.exec(line);
   if (header) return { kind: "cop", values: [at(header, 1)] };
   const item = /^\s+-\s+(.+?)\s*$/.exec(line);
   if (item) return { kind: "excludes", values: [unquote(at(item, 1))] };
   const flow = /^\s+Exclude:\s*\[(.*)\]\s*$/.exec(line);
   if (flow) return { kind: "excludes", values: at(flow, 1).split(",").map(unquote).filter(Boolean) };
   const setting = /^\s+(Max|Enabled):\s*(\S+)\s*$/.exec(line);
-  return setting ? { kind: "setting", values: [at(setting, 1), at(setting, 2)] } : { kind: "other", values: [] };
+  if (setting) return { kind: "setting", values: [at(setting, 1), at(setting, 2)] };
+  throw new Error(`rubocop todo: "${raw.trim()}" is no line the ratchet reads (a cop, its Exclude list, Max, Enabled)`);
 }
 
 /**
- * Every (cop, file) a rubocop todo excludes, and every cop setting it carries — a raised `Max:` or an
- * `Enabled: false` is a baseline too (a todo generated without --auto-gen-only-exclude), so it may not grow either.
+ * Every (cop, file) a rubocop todo excludes, and every `Max:` / `Enabled:` it carries — a raised Max or a disabled cop
+ * is a baseline too, so it may not grow either. Any other line (an `EnforcedStyle:` a todo generated without
+ * --auto-gen-only-exclude writes, an inline mapping) is cannot-tell: the recipe generates exclusions only.
  * @param {string} text
  * @returns {Map<string, number>}
  */
@@ -95,7 +105,7 @@ export function rubocopEntries(text) {
   /** @type {Map<string, number>} */
   const entries = new Map();
   let cop = "";
-  for (const raw of text.split("\n")) {
+  for (const raw of text.split(/\r?\n/)) {
     const { kind, values } = rubocopLine(raw);
     if (kind === "cop") cop = at(values, 0);
     else if (cop && kind === "excludes") values.forEach((path) => entries.set(keyOf(path, `${cop} excludes`), 1));
@@ -127,7 +137,7 @@ function settingWeight(name, raw) {
  * @returns {Map<string, number>}
  */
 export function listEntries(text) {
-  const lines = text.split("\n").map((line) => line.trim());
+  const lines = text.split(/\r?\n/).map((line) => line.trim());
   return new Map(lines.filter((line) => line && !line.startsWith("#")).map((line) => [keyOf(line, ""), 1]));
 }
 
@@ -137,11 +147,15 @@ export function listEntries(text) {
  * @returns {Map<string, number>}
  */
 export function duplicateEntries(text) {
-  const files = JSON.parse(text).files;
+  const record = JSON.parse(text);
+  const files = record.files;
   if (!files || typeof files !== "object" || Array.isArray(files)) {
     throw new Error("files is not a map of duplicated lines per file");
   }
-  return new Map(Object.entries(files).map(([file, lines]) => [keyOf(file, ""), countOf(lines, file)]));
+  const entries = new Map(Object.entries(files).map(([file, lines]) => [keyOf(file, ""), countOf(lines, file)]));
+  const total = record.duplicatedLines;
+  if (total !== sum(entries)) throw new Error(`duplicatedLines ${total} is not the sum of its files (${sum(entries)})`);
+  return entries;
 }
 
 /**
@@ -154,10 +168,6 @@ export function grown(base, head) {
   return [...head].filter(([key, count]) => count > (base.get(key) ?? 0));
 }
 
-/** @param {Map<string, number>} entries @returns {number} */
-const sum = (entries) => [...entries.values()].reduce((all, value) => all + value, 0);
-/** @param {Map<string, number>} entries @returns {number} */
-const size = (entries) => entries.size;
 /** @param {string} file @param {string} label @returns {string} */
 const fileFirst = (file, label) => (label ? `${file} ${label}` : file);
 /** @param {string} file @param {string} label @returns {string} */
@@ -234,6 +244,10 @@ function historyOf(ref) {
 function topKey(key, root, moved = new Map()) {
   const [file, label] = partsOf(key);
   if (file === "") return key;
+  const normal = posix.normalize(file);
+  if (posix.isAbsolute(file) || normal === ".." || normal.startsWith("../")) {
+    throw new Error(`a baseline entry names ${file}, outside its baseline's directory — no tool writes that`);
+  }
   const path = posix.join(root, file);
   return keyOf(moved.get(path) ?? path, label);
 }
@@ -330,7 +344,8 @@ function scopeOf(kind, top, head, { history, index }) {
   const own = ownCopy(kind, top, history);
   const root = rootOf(top, kind.name);
   const removed = own ? [] : named(history.base, kind.name).filter((path) => !history.kept.has(path));
-  const recorded = [...head.keys()].some((key) => partsOf(key)[0] !== "" && index().has(topKey(key, root)));
+  const files = new Set([...index().keys()].map((key) => partsOf(key)[0]));
+  const recorded = [...head.keys()].some((key) => partsOf(key)[0] !== "" && files.has(partsOf(topKey(key, root))[0]));
   if (!own && removed.length === 0 && !recorded) return null;
   return { own, removed: removed.map((path) => copyAt(kind, path, history)), root, index, history };
 }
@@ -426,12 +441,13 @@ function holdProblems(reportPath, { prefix, moved }) {
   const here = (/** @type {string} */ key) => keyOf(posix.relative(prefix || ".", partsOf(topKey(key, prefix, moved))[0]), "");
   const recorded = new Map([...written].map(([key, lines]) => [here(key), lines]));
   const rose = perFile(grown(recorded, measured));
-  if (rose.length > 0) return rose.map((entry) => `a new repeat of ≥ 10 lines in ${entry} — list them: jscpd --reporters console`);
   const fell = perFile(grown(measured, recorded));
-  if (fell.length > 0) return [`${DUPLICATES} records more than jscpd measures (${fell.join(", ")}): lower it — --write-duplicates ${reportPath}`];
   const stale = [...written.keys()].map((key) => partsOf(key)[0]).filter((file) => moved.has(posix.join(prefix, file)));
-  if (stale.length > 0) return [`${DUPLICATES} names renamed files (${stale.join(", ")}): record their new names — --write-duplicates ${reportPath}`];
-  return [];
+  return [
+    ...rose.map((entry) => `a new repeat (over .jscpd.json's floors) in ${entry} — list them: jscpd --reporters console`),
+    ...(fell.length ? [`${DUPLICATES} records more than jscpd measures (${fell.join(", ")}): lower it — --write-duplicates ${reportPath}`] : []),
+    ...(stale.length ? [`${DUPLICATES} names renamed files (${stale.join(", ")}): record their new names — --write-duplicates ${reportPath}`] : []),
+  ];
 }
 
 /** @param {string} reportPath @returns {string} the baseline jscpd's report gives, per file and in total */
@@ -443,7 +459,7 @@ function duplicatesBaseline(reportPath) {
 /** @param {string[]} tracked @returns {{ sizes: Record<string, number>, unreadable: string[] }} */
 function counts(tracked) {
   /** @type {Record<string, number>} */
-  const sizes = { eslint: 0, rubocop: 0, legacy: 0, duplicates: 0 };
+  const sizes = Object.fromEntries(KINDS.map(({ key }) => [key, 0]));
   /** @type {string[]} */
   const unreadable = [];
   for (const { key, name, entries, measure } of KINDS) {
@@ -484,19 +500,40 @@ function lockLines(text) {
   });
 }
 
-/** @param {string} sum @param {string} path @returns {string[]} */
-function copyProblems(sum, path) {
+/** @param {string} expected the list's sha256 @param {string} path @returns {string[]} */
+function copyProblems(expected, path) {
   if (!existsSync(path)) return [];
-  const actual = createHash("sha256").update(readFileSync(path)).digest("hex");
-  if (actual === sum) return [];
+  const text = readFileSync(path, "utf8").replace(/\r/g, ""); // a CRLF checkout (core.autocrlf) is the same preset
+  const actual = createHash("sha256").update(text).digest("hex");
+  if (actual === expected) return [];
   return [`${path} differs from the preset it copies (${LOCK}): edit it where the presets are kept, never here`];
 }
+
+/**
+ * The commit a GitHub push event moved the branch from: on a push to main, origin/main is the pushed commit itself, so
+ * the push is compared with what the branch held before it. None for another event, a new or deleted branch or no
+ * event file; an event file that cannot be read is cannot-tell.
+ * @returns {string | null}
+ */
+function pushedFrom() {
+  const file = process.env["GITHUB_EVENT_PATH"];
+  if (process.env["GITHUB_EVENT_NAME"] !== "push" || !file) return null;
+  const event = JSON.parse(readFileSync(file, "utf8"));
+  const before = String(event.before ?? "");
+  if (event.deleted === true) return null; // a deleted branch: nothing was pushed to compare
+  return /^[0-9a-f]{40}$/.test(before) && !/^0+$/.test(before) ? before : null;
+}
+
+const VALUED = new Set(["--base", "--duplicates", "--write-duplicates"]);
+const ARGS = new Set([...VALUED, "--counts"]);
 
 /**
  * @param {string[]} argv
  * @returns {{ base: string, duplicates: string | null, write: string | null, counts: boolean }}
  */
 export function parseArgs(argv) {
+  const unknown = argv.filter((arg, i) => !ARGS.has(arg) && !VALUED.has(at(argv, i - 1)));
+  if (unknown.length > 0) throw new Error(`unknown argument ${unknown.join(" ")} — usage: [--base <ref>] [--duplicates <report>] | --write-duplicates <report> | --counts`);
   const value = (/** @type {string} */ flag) => {
     if (!argv.includes(flag)) return null;
     const given = argv[argv.indexOf(flag) + 1];
@@ -504,22 +541,25 @@ export function parseArgs(argv) {
     return given;
   };
   const pr = process.env["GITHUB_BASE_REF"];
-  return {
-    base: value("--base") ?? (process.env["BASELINE_RATCHET_BASE"] || (pr ? `origin/${pr}` : "origin/main")),
-    duplicates: value("--duplicates"),
-    write: value("--write-duplicates"),
-    counts: argv.includes("--counts"),
-  };
+  const write = value("--write-duplicates");
+  const counts = argv.includes("--counts");
+  const named = value("--base");
+  // --counts and --write-duplicates compare nothing: their run never reads a push event
+  const base = counts || write !== null ? "" : (named ?? (process.env["BASELINE_RATCHET_BASE"] || (pr ? `origin/${pr}` : (pushedFrom() ?? "origin/main"))));
+  return { base, duplicates: value("--duplicates"), write, counts };
 }
 
 /** @param {{ base: string, duplicates: string | null }} options @returns {number} */
 function check(options) {
   try {
     git("rev-parse", "--verify", "--quiet", `${options.base}^{commit}`);
-  } catch {
-    throw new Error(`base ${options.base} not found — fetch it (CI: fetch-depth: 0)`);
+  } catch (error) {
+    const said = String(/** @type {{ stderr?: unknown }} */ (error).stderr ?? "").trim().split("\n")[0];
+    throw new Error(said ? `git: ${said}` : `base ${options.base} not found — fetch it (CI: fetch-depth: 0)`, { cause: error });
   }
-  const history = historyOf(options.base);
+  // The branch is held to where it left the base (a pull request merge commit's merge base is the base itself): a
+  // baseline the base lowered after the branch left it is no growth of the branch.
+  const history = historyOf(git("merge-base", "HEAD", options.base).trim());
   const hold = options.duplicates === null ? [] : holdProblems(options.duplicates, history);
   const { problems, adoptions } = growth(history, trackedFiles());
   const all = [...problems, ...hold, ...presetProblems()];
@@ -549,5 +589,15 @@ export function main(argv) {
   }
 }
 
-const invoked = process.argv[1] ? realpathSync(process.argv[1]) : "";
-if (invoked === realpathSync(fileURLToPath(import.meta.url))) process.exitCode = main(process.argv.slice(2));
+/** @returns {boolean} whether this file is the program node runs (not a module another file imports) */
+function isProgram() {
+  const self = fileURLToPath(import.meta.url);
+  const started = process.argv[1] ?? "";
+  try {
+    return Boolean(started) && realpathSync(started) === realpathSync(self);
+  } catch {
+    return resolve(started) === self; // a path realpath cannot resolve still names this file when node started it
+  }
+}
+
+if (isProgram()) process.exitCode = main(process.argv.slice(2));

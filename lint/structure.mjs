@@ -25,6 +25,8 @@ const THROWS_CALLS = [
 ];
 const NO_EXPECTED_ERROR = [
   "[arguments.length<2]",
+  "[arguments.length>=2][arguments.1.type='Identifier'][arguments.1.name='undefined']",
+  "[arguments.length>=3][arguments.1.type='Literal'][arguments.1.raw='null']", // two arguments: the Literal rule below
   "[arguments.length=2][arguments.1.type='TemplateLiteral']",
   "[arguments.length=2][arguments.1.type='Literal']:not([arguments.1.regex])",
 ];
@@ -51,6 +53,13 @@ const ASSERTING = [
   "CallExpression[callee.name=/^(assert|expect)/]",
   "CallExpression[callee.property.name=/^(assert|expect)/]",
 ];
+// node:test with Playwright's expect — an expect() used as a statement, with no matcher, asserts nothing.
+export const BARE_EXPECT = {
+  selector:
+    ":matches(ExpressionStatement > CallExpression.expression, ExpressionStatement > AwaitExpression > CallExpression)[callee.name='expect']",
+  message: "An expect() without a matcher asserts nothing: call one (toBe, toEqual, toHaveText, …).",
+};
+
 export const NO_ASSERTION = {
   selector:
     ":matches(CallExpression[callee.name=/^(test|it)$/], CallExpression[callee.object.name=/^(test|it)$/][callee.property.name='only'], " +
@@ -70,6 +79,11 @@ const VITEST_RULES = {
   "vitest/valid-expect": ["error", { maxArgs: 2 }],
 };
 
+// The 40-line limit for production code; exported so a project that gives it back to files the test glob catches (a
+// Next.js route segment named test/) spreads the same rule, never a copy of its options.
+/** @type {import("eslint").Linter.RuleEntry} */
+export const FUNCTION_LENGTH = ["error", { max: 40, skipBlankLines: false, skipComments: false }];
+
 /**
  * The structure rules as flat-config objects. Pass `vitest` (the `@vitest/eslint-plugin` default export) when the
  * project's tests run on Vitest; without it the tests get the node:test rule.
@@ -80,8 +94,9 @@ export function structure({ vitest } = {}) {
   /** @type {Config} */
   const tests = vitest
     ? { files: TESTS, plugins: { vitest }, rules: VITEST_RULES }
-    : { files: TESTS, rules: { "no-restricted-syntax": ["error", ...BARE_THROWS, NO_ASSERTION] } };
+    : { files: TESTS, rules: { "no-restricted-syntax": ["error", ...BARE_THROWS, NO_ASSERTION, BARE_EXPECT] } };
   return [
+    { ignores: ["**/.claude/worktrees/**"] }, // Claude Code's worktrees: another checkout of the same files
     {
       files: SOURCES,
       plugins: { "@eslint-community/eslint-comments": comments },
@@ -93,11 +108,7 @@ export function structure({ vitest } = {}) {
         "@eslint-community/eslint-comments/no-unlimited-disable": "error",
       },
     },
-    {
-      files: SOURCES,
-      ignores: TESTS,
-      rules: { "max-lines-per-function": ["error", { max: 40, skipBlankLines: false, skipComments: false }] },
-    },
+    { files: SOURCES, ignores: TESTS, rules: { "max-lines-per-function": FUNCTION_LENGTH } },
     tests,
   ];
 }
