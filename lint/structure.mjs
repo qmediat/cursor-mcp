@@ -9,8 +9,8 @@ import comments from "@eslint-community/eslint-plugin-eslint-comments";
 
 const SOURCES = ["**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"];
 const TESTS = [
-  "**/*.{test,spec}.{ts,tsx,mts,cts,js,jsx,mjs,cjs}",
-  "**/{test,tests,__tests__}/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}",
+  "**/*.{test,spec,e2e}.{ts,tsx,mts,cts,js,jsx,mjs,cjs}",
+  "**/{test,tests,__tests__,e2e}/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}",
 ];
 
 // node:test — assert.throws / assert.rejects (also t.assert.…, assert.strict.…, an imported throws) with no expected
@@ -20,6 +20,7 @@ const TESTS = [
 const THROWS_CALLS = [
   "CallExpression[callee.object.name='assert'][callee.property.name=/^(throws|rejects)$/]",
   "CallExpression[callee.object.property.name=/^(assert|strict)$/][callee.property.name=/^(throws|rejects)$/]",
+  "CallExpression[callee.object.name='strict'][callee.property.name=/^(throws|rejects)$/]",
   "CallExpression[callee.type='Identifier'][callee.name=/^(throws|rejects)$/]",
 ];
 const NO_EXPECTED_ERROR = [
@@ -34,21 +35,27 @@ export const BARE_THROWS = THROWS_CALLS.flatMap((call) => NO_EXPECTED_ERROR.map(
   }),
 );
 
-// node:test — a test whose function calls no assertion passes whatever the code does. An assertion is assert…,
-// t.assert…, a function node:assert exports imported by name, or a helper named assert* / expect*.
+// node:test — a test or a t.test subtest whose function calls no assertion passes whatever the code does. An
+// assertion is assert… (assert.strict… and an imported strict… too), expect… (expect.poll, expect.soft), t.assert…, a
+// function node:assert exports imported by name, or a helper named assert* / expect*; t.skip / t.todo say the test is
+// deliberately empty. test.only and it.only are tests; test.skip is not run.
 const ASSERT_EXPORTS =
   "ok|equal|notEqual|strictEqual|notStrictEqual|deepEqual|notDeepEqual|deepStrictEqual|notDeepStrictEqual|" +
   "partialDeepStrictEqual|throws|doesNotThrow|rejects|doesNotReject|match|doesNotMatch|fail|ifError";
 const ASSERTING = [
   `CallExpression[callee.type='Identifier'][callee.name=/^(${ASSERT_EXPORTS})$/]`,
-  "CallExpression[callee.object.name='assert']",
+  "CallExpression[callee.object.name=/^(assert|expect|strict)$/]",
+  "CallExpression[callee.object.object.name='assert']",
+  "CallExpression[callee.object.name='t'][callee.property.name=/^(skip|todo)$/]",
   "CallExpression[callee.object.property.name='assert']",
   "CallExpression[callee.name=/^(assert|expect)/]",
   "CallExpression[callee.property.name=/^(assert|expect)/]",
 ];
 export const NO_ASSERTION = {
   selector:
-    "CallExpression[callee.name=/^(test|it)$/] > :matches(ArrowFunctionExpression, FunctionExpression)" +
+    ":matches(CallExpression[callee.name=/^(test|it)$/], CallExpression[callee.object.name=/^(test|it)$/][callee.property.name='only'], " +
+    "CallExpression[callee.object.name='t'][callee.property.name='test'])" +
+    " > :matches(ArrowFunctionExpression, FunctionExpression)" +
     ASSERTING.map((call) => `:not(:has(${call}))`).join(""),
   message: "A test without an assertion passes whatever the code does: assert, or call a helper named assert* or expect*.",
 };
@@ -59,7 +66,7 @@ export const NO_ASSERTION = {
 /** @type {import("eslint").Linter.RulesRecord} */
 const VITEST_RULES = {
   "vitest/require-to-throw-message": "error",
-  "vitest/expect-expect": ["error", { assertFunctionNames: ["expect*", "assert*", "assert.*"] }],
+  "vitest/expect-expect": ["error", { assertFunctionNames: ["expect*", "assert*"] }],
   "vitest/valid-expect": ["error", { maxArgs: 2 }],
 };
 

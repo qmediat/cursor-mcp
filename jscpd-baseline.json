@@ -1,1 +1,8 @@
-{"duplicatedLines":35}
+{
+  "duplicatedLines": 70,
+  "files": {
+    "src/tools/cursor-agent.ts": 11,
+    "src/tools/cursor-reply.ts": 11,
+    "test/cancel.test.mjs": 48
+  }
+}

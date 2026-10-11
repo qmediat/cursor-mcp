@@ -17,7 +17,7 @@ bundled TypeScript.
 
 ### Prerequisites
 
-- Node.js >= 22.0.0
+- Node.js >= 22.0.0 to run it; >= 22.18 (or >= 24.11) to develop it — the lint toolchain's Babel 8 needs it
 - cursor-agent CLI installed and authenticated (`cursor-agent login`)
 
 ### Local Testing

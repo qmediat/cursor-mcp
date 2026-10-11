@@ -18,17 +18,17 @@
     "**/package-lock.json",
     "**/eslint-suppressions.json",
     "**/.jscpd-report/**",
-    "lint/structure.mjs",
-    "lint/baseline-ratchet.mjs"
+    "**/.claude/worktrees/**"
   ],
   "output": ".jscpd-report",
   "path": [
-    "src",
-    "test",
-    "eslint.config.mjs"
+    "."
   ],
+  "pattern": "{src,test}/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}",
   "format": [
     "typescript",
-    "javascript"
+    "tsx",
+    "javascript",
+    "jsx"
   ]
 }

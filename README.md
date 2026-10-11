@@ -266,6 +266,7 @@ git clone https://github.com/qmediat/cursor-mcp.git
 cd cursor-mcp
 npm install
 npm run build
+npm run lint   # structure rules, repeated blocks, the baseline ratchet (docs/SYSTEMIC.md §1)
 node dist/index.js
 ```
 
