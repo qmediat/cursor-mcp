@@ -1,7 +1,6 @@
 {
   "minLines": 10,
   "minTokens": 50,
-  "gitignore": true,
   "absolute": false,
   "reporters": [
     "json"

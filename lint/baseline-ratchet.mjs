@@ -4,25 +4,29 @@
 //
 //   node lint/baseline-ratchet.mjs [--base <ref>] [--duplicates <jscpd-report.json>]
 //     Compares every tracked baseline with the base branch (--base, else $BASELINE_RATCHET_BASE — a release job sets
-//     HEAD: the tag's tree was checked on its pull request —, else origin/$GITHUB_BASE_REF in a pull request, else
-//     origin/main) and fails when an entry appeared or a count rose — `eslint --suppress-all` and a regenerated
-//     rubocop todo would otherwise hide a new violation. A baseline the base branch does not have is an adoption.
+//     HEAD: the tag's tree was checked on its pull request —, else origin/$GITHUB_BASE_REF in a pull request, else the
+//     commit a push moved the branch from (GitHub's push event), else origin/main) and fails when an entry appeared or a count rose — `eslint --suppress-all` and a regenerated
+//     rubocop todo would otherwise hide a new violation. A baseline the base branch does not have is an adoption (unless a
+//     base copy read in part could have named its files: cannot tell).
 //     With --duplicates, jscpd's report must measure exactly the duplicated lines `jscpd-baseline.json` records: more
 //     is a new repeat, fewer asks for the baseline to be lowered (--write-duplicates), no file analyzed is "cannot tell".
 //   node lint/baseline-ratchet.mjs --write-duplicates <jscpd-report.json>   records the measured duplicated lines
-//   node lint/baseline-ratchet.mjs --counts           every baseline's size, as JSON (exit 2 when one is unreadable)
-// Every run also holds the vendored preset files (lint/structure.mjs, lint/baseline-ratchet.mjs) to
-// lint/presets.sha256, the presets' own list copied beside them: a file edited here is refused.
-// Exit: 0 clean, 1 a baseline grew or does not hold, 2 cannot tell (no base ref, an unreadable file or report).
+//   node lint/baseline-ratchet.mjs --counts           {sizes: every kind's size, unreadable: [...]} as JSON (exit 2 when
+//                                                     one is unreadable)
+//   Any other argument (`--fix` through `npm run lint --`, `--duplicates=<report>`) is a usage error, exit 2.
+// Every check (not --counts, not --write-duplicates) also holds the vendored preset files under lint/ of the directory
+// it runs in to lint/presets.sha256, the presets' own list copied beside them: a file edited here is refused.
+// Exit: 0 clean, 1 a baseline grew or does not hold, 2 cannot tell (no base ref, an unreadable file or report, an entry
+// or a new baseline a base copy read in part could hold) — 1 whenever anything definitely grew.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { isAbsolute, posix, relative } from "node:path";
+import { isAbsolute, posix, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const DUPLICATES = "jscpd-baseline.json";
 export const LOCK = "lint/presets.sha256";
-const VENDORED = ["lint/structure.mjs", "lint/baseline-ratchet.mjs"];
+export const VENDORED = ["lint/structure.mjs", "lint/baseline-ratchet.mjs", "lint/rubocop-structure.yml", "lint/rubocop-rspec.yml"];
 
 /** @param {...string} args */
 const git = (...args) =>
@@ -39,6 +43,43 @@ function countOf(value, where) {
   return value;
 }
 
+/**
+ * A value a baseline holds that the ratchet cannot read: at head (`skipped` null) it is cannot-tell; in a base copy it
+ * is left out and its reason kept in `skipped`, said by the run. A base entry left out can only make the head's read as
+ * growth or cannot-tell, never hide it — and a line left out lends nothing to the entries around it.
+ * @param {string} reason
+ * @param {string[] | null} skipped
+ */
+function skip(reason, skipped) {
+  if (skipped === null) throw new Error(reason);
+  skipped.push(reason);
+}
+
+/**
+ * @template T
+ * @param {() => T} read a value of a baseline, thrown when unreadable
+ * @param {string[] | null} skipped null at head
+ * @returns {T | null} null when a base copy's value was left out
+ */
+function readValue(read, skipped) {
+  if (skipped === null) return read();
+  try {
+    return read();
+  } catch (error) {
+    if (isDefect(error)) throw error; // a defect of this file, never a value of the data
+    skipped.push(error instanceof Error ? error.message : String(error));
+    return null;
+  }
+}
+
+/** @param {unknown} error @returns {boolean} a programming error (the data's are plain Errors and JSON's SyntaxError) */
+const isDefect = (error) => error instanceof TypeError || error instanceof ReferenceError || error instanceof RangeError;
+
+/** @param {Map<string, number>} entries @returns {number} */
+const sum = (entries) => [...entries.values()].reduce((all, value) => all + value, 0);
+/** @param {Map<string, number>} entries @returns {number} */
+const size = (entries) => entries.size;
+
 // An entry's key holds the file it is about and what is recorded for it, apart: a rename moves the file and nothing
 // else, whatever characters the path has. The file is relative to the baseline's root; "" when no file carries it.
 const SEP = "\0";
@@ -50,58 +91,157 @@ const partsOf = (key) => [key.slice(0, key.indexOf(SEP)), key.slice(key.indexOf(
 /**
  * Every suppressed (file, rule) of an ESLint bulk-suppressions file, with its count.
  * @param {string} text
+ * @param {string[] | null} [skipped] null at head; a base copy's unreadable counts are left out into it
  * @returns {Map<string, number>}
  */
-export function eslintEntries(text) {
+export function eslintEntries(text, skipped = null) {
+  const record = JSON.parse(text);
+  if (!isMap(record)) throw new Error("not a map of files to their suppressed rules");
   /** @type {Map<string, number>} */
   const entries = new Map();
-  for (const [file, rules] of Object.entries(JSON.parse(text))) {
-    for (const [rule, { count }] of Object.entries(rules)) entries.set(keyOf(file, rule), countOf(count, file));
+  for (const [file, rules] of Object.entries(record)) {
+    if (!isMap(rules)) {
+      skip(`${file}: not a map of rules`, skipped);
+      continue;
+    }
+    for (const [rule, value] of Object.entries(rules)) {
+      const read = readValue(() => countOf(value?.count, file), skipped);
+      if (read !== null) entries.set(keyOf(file, rule), read);
+    }
   }
   return entries;
 }
 
+/** @param {unknown} value @returns {value is Record<string, any>} a JSON object (not an array, not null) */
+const isMap = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+
 /** @param {ArrayLike<string | undefined> | null} list @param {number} index @returns {string} */
 const at = (list, index) => list?.[index] ?? "";
 
-/** @param {string} item a YAML scalar, quoted or not @returns {string} */
-const unquote = (item) => item.trim().replace(/^['"]|['"]$/g, "");
-
-/**
- * One line of a rubocop todo, its trailing comment dropped: a cop header, excluded files (a block item or a flow
- * list), a Max / Enabled setting, or anything else.
- * @param {string} raw
- * @returns {{ kind: string, values: string[] }}
- */
-function rubocopLine(raw) {
-  const line = raw.replace(/\s+#.*$/, "");
-  const header = /^([A-Z]\w*\/\w+):\s*$/.exec(line);
-  if (header) return { kind: "cop", values: [at(header, 1)] };
-  const item = /^\s+-\s+(.+?)\s*$/.exec(line);
-  if (item) return { kind: "excludes", values: [unquote(at(item, 1))] };
-  const flow = /^\s+Exclude:\s*\[(.*)\]\s*$/.exec(line);
-  if (flow) return { kind: "excludes", values: at(flow, 1).split(",").map(unquote).filter(Boolean) };
-  const setting = /^\s+(Max|Enabled):\s*(\S+)\s*$/.exec(line);
-  return setting ? { kind: "setting", values: [at(setting, 1), at(setting, 2)] } : { kind: "other", values: [] };
+/** @param {string} item a YAML scalar, quoted or not @returns {string} its value ('' and \" undone) */
+function unquote(item) {
+  const value = item.trim();
+  if (/^'.*'$/.test(value)) return value.slice(1, -1).replaceAll("''", "'");
+  if (/^".*"$/.test(value)) return value.slice(1, -1).replace(/\\(.)/g, "$1");
+  return value;
 }
 
 /**
- * Every (cop, file) a rubocop todo excludes, and every cop setting it carries — a raised `Max:` or an
- * `Enabled: false` is a baseline too (a todo generated without --auto-gen-only-exclude), so it may not grow either.
+ * @typedef {"blank" | "cop" | "exclude" | "item" | "flow" | "setting" | "key" | "top"} TodoKind
+ * @typedef {{ kind: TodoKind, values: string[] }} TodoLine
+ * @typedef {{ cop: string, listing: boolean }} TodoState the cop being read, and whether inside its Exclude block
+ */
+
+/**
+ * One line of a rubocop todo, its trailing comment dropped: blank, a cop header, `Exclude:` opening a block list, an
+ * item, a flow list, a Max / Enabled setting — or a line the ratchet does not read: another key of the cop ("key",
+ * indented) or of the file ("top", at column 0).
+ * @param {string} raw
+ * @returns {TodoLine}
+ */
+function rubocopLine(raw) {
+  const line = withoutComment(raw);
+  if (line.trim() === "") return { kind: "blank", values: [] };
+  if (/^\s+Exclude:\s*$/.test(line)) return { kind: "exclude", values: [] };
+  const header = /^([A-Z]\w*(?:\/\w+)+):\s*$/.exec(line);
+  if (header) return { kind: "cop", values: [at(header, 1)] };
+  const item = /^\s+-\s+(.+?)\s*$/.exec(line);
+  if (item) return { kind: "item", values: [unquote(at(item, 1))] };
+  const flow = /^\s+Exclude:\s*\[(.*)\]\s*$/.exec(line);
+  if (flow) return { kind: "flow", values: at(flow, 1).split(",").map(unquote).filter(Boolean) };
+  const setting = /^\s+(Max|Enabled):\s*(\S+)\s*$/.exec(line);
+  if (setting) return { kind: "setting", values: [at(setting, 1), at(setting, 2)] };
+  return { kind: /^\s/.test(line) ? "key" : "top", values: [] };
+}
+
+/**
+ * A todo line without its trailing comment: a `#` that starts the line or follows a space, outside a quoted scalar — a
+ * quoted path may hold " #", and an apostrophe inside a plain one (`it's.rb`) opens nothing.
+ * @param {string} raw
+ * @returns {string}
+ */
+function withoutComment(raw) {
+  for (let i = 0; i < raw.length; i += 1) {
+    if (opensQuote(raw, i)) i = closingQuote(raw, i);
+    else if (raw.charAt(i) === "#" && (i === 0 || /\s/.test(raw.charAt(i - 1)))) return raw.slice(0, i);
+  }
+  return raw;
+}
+
+/**
+ * Where the quoted scalar opened at `start` closes: '' inside single quotes and \" inside double quotes are escapes,
+ * not its end; the line's end when it never closes.
+ * @param {string} raw
+ * @param {number} start
+ * @returns {number}
+ */
+function closingQuote(raw, start) {
+  const quote = raw.charAt(start);
+  for (let i = start + 1; i < raw.length; i += 1) {
+    const char = raw.charAt(i);
+    if (quote === '"' && char === "\\") i += 1;
+    else if (char === quote && quote === "'" && raw.charAt(i + 1) === "'") i += 1;
+    else if (char === quote) return i;
+  }
+  return raw.length;
+}
+
+/** @param {string} raw @param {number} i @returns {boolean} a quote at i opens a quoted scalar: it starts a value */
+const opensQuote = (raw, i) => /['"]/.test(raw.charAt(i)) && (i === 0 || /[\s[,]/.test(raw.charAt(i - 1)));
+
+/**
+ * The state after a todo line, or null when the line is not read where it stands: another key, an item outside an
+ * Exclude block, a list or a setting before any cop.
+ * @param {TodoLine} line
+ * @param {TodoState} state
+ * @returns {TodoState | null}
+ */
+function nextState({ kind, values }, { cop, listing }) {
+  if (kind === "blank") return { cop, listing };
+  if (kind === "cop") return { cop: at(values, 0), listing: false };
+  if (cop === "" || kind === "key" || kind === "top" || (kind === "item" && !listing)) return null;
+  return { cop, listing: kind === "exclude" || kind === "item" };
+}
+
+/**
+ * Records a read line's entries: its excluded files, or its setting's weight.
+ * @param {TodoLine} line
+ * @param {string} cop
+ * @param {Map<string, number>} entries
+ * @param {string[] | null} skipped
+ */
+function recordTodoLine({ kind, values }, cop, entries, skipped) {
+  if (kind === "item" || kind === "flow") values.forEach((path) => entries.set(keyOf(path, `${cop} excludes`), 1));
+  if (kind !== "setting") return;
+  const weight = readValue(() => settingWeight(at(values, 0), at(values, 1)), skipped);
+  if (weight !== null) entries.set(keyOf("", `${cop} ${at(values, 0)}`), weight);
+}
+
+/**
+ * Every (cop, file) a rubocop todo excludes, and every `Max:` / `Enabled:` it carries — a raised Max or a disabled cop
+ * is a baseline too, so it may not grow either. Any other line (an `EnforcedStyle:` a todo generated without
+ * --auto-gen-only-exclude writes, an inline mapping) is cannot-tell at head — the recipe generates exclusions only —
+ * and left out of a base copy, where it ends what it would extend: a top-level key ends the cop, another key its
+ * Exclude block.
  * @param {string} text
+ * @param {string[] | null} [skipped] null at head; a base copy's unread lines and values are left out into it
  * @returns {Map<string, number>}
  */
-export function rubocopEntries(text) {
+export function rubocopEntries(text, skipped = null) {
   /** @type {Map<string, number>} */
   const entries = new Map();
-  let cop = "";
-  for (const raw of text.split("\n")) {
-    const { kind, values } = rubocopLine(raw);
-    if (kind === "cop") cop = at(values, 0);
-    else if (cop && kind === "excludes") values.forEach((path) => entries.set(keyOf(path, `${cop} excludes`), 1));
-    else if (cop && kind === "setting") {
-      entries.set(keyOf("", `${cop} ${at(values, 0)}`), settingWeight(at(values, 0), at(values, 1)));
+  /** @type {TodoState} */
+  let state = { cop: "", listing: false };
+  for (const raw of text.split(/\r?\n/)) {
+    const line = rubocopLine(raw);
+    const next = nextState(line, state);
+    if (next === null) {
+      skip(`rubocop todo: "${raw.trim()}" is no line the ratchet reads (a cop, its Exclude list, Max, Enabled)`, skipped);
+      state = { cop: line.kind === "top" ? "" : state.cop, listing: false };
+      continue;
     }
+    recordTodoLine(line, state.cop, entries, skipped);
+    state = next;
   }
   return entries;
 }
@@ -127,21 +267,33 @@ function settingWeight(name, raw) {
  * @returns {Map<string, number>}
  */
 export function listEntries(text) {
-  const lines = text.split("\n").map((line) => line.trim());
+  const lines = text.split(/\r?\n/).map((line) => line.trim());
   return new Map(lines.filter((line) => line && !line.startsWith("#")).map((line) => [keyOf(line, ""), 1]));
 }
 
 /**
- * The lines in a repeat a jscpd baseline records per file.
+ * The lines in a repeat a jscpd baseline records per file; its total must be their sum.
  * @param {string} text
+ * @param {string[] | null} [skipped] null at head; a base copy's unreadable counts are left out into it
  * @returns {Map<string, number>}
  */
-export function duplicateEntries(text) {
-  const files = JSON.parse(text).files;
-  if (!files || typeof files !== "object" || Array.isArray(files)) {
+export function duplicateEntries(text, skipped = null) {
+  const record = JSON.parse(text);
+  if (!isMap(record)) throw new Error("not a jscpd baseline record");
+  const files = record.files;
+  if (!isMap(files)) {
     throw new Error("files is not a map of duplicated lines per file");
   }
-  return new Map(Object.entries(files).map(([file, lines]) => [keyOf(file, ""), countOf(lines, file)]));
+  /** @type {Map<string, number>} */
+  const entries = new Map();
+  for (const [file, lines] of Object.entries(files)) {
+    const read = readValue(() => countOf(lines, file), skipped);
+    if (read !== null) entries.set(keyOf(file, ""), read);
+  }
+  const total = record.duplicatedLines;
+  // a base copy's total is not read: it loses no entry, and a copy is read in part only when one is left out
+  if (skipped === null && total !== sum(entries)) throw new Error(`duplicatedLines ${total} is not the sum of its files (${sum(entries)})`);
+  return entries;
 }
 
 /**
@@ -154,10 +306,6 @@ export function grown(base, head) {
   return [...head].filter(([key, count]) => count > (base.get(key) ?? 0));
 }
 
-/** @param {Map<string, number>} entries @returns {number} */
-const sum = (entries) => [...entries.values()].reduce((all, value) => all + value, 0);
-/** @param {Map<string, number>} entries @returns {number} */
-const size = (entries) => entries.size;
 /** @param {string} file @param {string} label @returns {string} */
 const fileFirst = (file, label) => (label ? `${file} ${label}` : file);
 /** @param {string} file @param {string} label @returns {string} */
@@ -188,29 +336,38 @@ const trackedFiles = () => git("ls-files", "-z").split("\0").filter(Boolean);
 /**
  * @typedef {object} Kind a baseline format (KINDS)
  * @property {string} name
- * @property {(text: string) => Map<string, number>} entries
+ * @property {(text: string, skipped?: string[] | null) => Map<string, number>} entries
  * @property {(entries: Map<string, number>) => number} measure
  * @property {(file: string, label: string) => string} show
  */
 /**
  * @typedef {object} History the base and what changed since, every path from the repository's top
- * @property {string} ref the base
+ * @property {string} ref the commit compared with: where the branch left the base
+ * @property {string} name the base as named (a branch, a commit), for messages
  * @property {string} prefix the working directory from the top, "" or "dir/"
  * @property {Map<string, string>} moved old path → new path (git's rename detection)
  * @property {Map<string, string>} origins new path → old path
  * @property {string[]} base every file at the base
  * @property {Set<string>} kept the base's files the head still tracks
+ * @property {string[]} skipped what base copies held that the ratchet could not read, left out (said by the run)
  */
-/** @typedef {{ from: string, root: string, entries: Map<string, number> }} Copy a baseline at the base */
+/**
+ * @typedef {object} Copy a baseline at the base
+ * @property {string} from its path from the top
+ * @property {string} root its root from the top
+ * @property {Map<string, number>} entries what it was read to hold
+ * @property {boolean} partial whether anything was left out of it (an absent entry may then be one it held)
+ */
 
 /**
  * What changed since the base, seen from the repository's top whatever directory the ratchet runs in (the head's
  * baselines are the directory's). Asked through ls-tree and ls-files, whose answers are listings, not messages in the
  * user's language; NUL-separated, whatever characters a path has; any git failure throws (cannot tell).
- * @param {string} ref
+ * @param {string} ref the commit compared with
+ * @param {string} [name] the base as named
  * @returns {History}
  */
-function historyOf(ref) {
+function historyOf(ref, name = ref) {
   const list = (/** @type {string[]} */ ...args) => git(...args).split("\0").filter(Boolean);
   const parts = git("diff", "-M", "--name-status", "--diff-filter=R", "-z", ref).split("\0");
   /** @type {Map<string, string>} */
@@ -220,7 +377,7 @@ function historyOf(ref) {
   const head = new Set(list("ls-files", "--full-name", "-z", "--", ":/"));
   const kept = new Set(base.filter((path) => head.has(path)));
   const origins = new Map([...moved].map(([from, to]) => [to, from]));
-  return { ref, prefix: git("rev-parse", "--show-prefix").trim(), moved, origins, base, kept };
+  return { ref, name, prefix: git("rev-parse", "--show-prefix").trim(), moved, origins, base, kept, skipped: [] };
 }
 
 /**
@@ -234,49 +391,127 @@ function historyOf(ref) {
 function topKey(key, root, moved = new Map()) {
   const [file, label] = partsOf(key);
   if (file === "") return key;
+  if (isOutside(file)) throw new Error(outsideReason(file));
   const path = posix.join(root, file);
   return keyOf(moved.get(path) ?? path, label);
 }
 
-/** @param {Kind} kind @param {string} path from the top @param {History} history @returns {Copy} */
-const copyAt = (kind, path, history) => ({
-  from: path,
-  root: rootOf(path, kind.name),
-  entries: kind.entries(git("show", `${history.ref}:${path}`)),
-});
+/** @param {string} file @returns {boolean} whether an entry's file lies outside its baseline's directory */
+const isOutside = (file) => {
+  const normal = posix.normalize(file);
+  return posix.isAbsolute(file) || normal === ".." || normal.startsWith("../");
+};
+/** @param {string} file @returns {string} */
+const outsideReason = (file) => `a baseline entry names ${file}, outside its baseline's directory — no tool writes that`;
+
+/**
+ * A baseline as the base holds it, read leniently: what the ratchet cannot read is left out and said (History.skipped).
+ * @param {Kind} kind
+ * @param {string} path from the top
+ * @param {History} history
+ * @returns {Copy}
+ */
+function copyAt(kind, path, history) {
+  const text = git("show", `${history.ref}:${path}`);
+  /** @type {string[]} */
+  const skipped = [];
+  /** @type {Map<string, number>} */
+  const entries = new Map();
+  /** @type {string[]} */
+  const whole = [];
+  for (const [key, count] of readValue(() => kind.entries(text, skipped), whole) ?? []) {
+    const file = partsOf(key)[0];
+    if (isOutside(file)) skipped.push(outsideReason(file));
+    else entries.set(key, count);
+  }
+  skipped.push(...whole.map((reason) => `the whole copy (${reason})`));
+  history.skipped.push(...skipped.map((reason) => `${path} at its merge base with ${history.name}: ${firstLines([reason])}`));
+  return { from: path, root: rootOf(path, kind.name), entries, partial: skipped.length > 0 };
+}
 
 /**
  * A head baseline's own base copy: at its path, or where git saw it renamed from under its kind's name; null when it
  * has none (a new or an unpaired moved baseline).
  * @param {Kind} kind
  * @param {string} top the baseline's path from the top
- * @param {History} history
+ * @param {KindBase} base the kind's copies, read once
  * @returns {Copy | null}
  */
-function ownCopy(kind, top, history) {
-  if (history.kept.has(top)) return copyAt(kind, top, history);
-  const origin = history.origins.get(top);
-  return origin !== undefined && isNamed(origin, kind.name) ? copyAt(kind, origin, history) : null;
+function ownCopy(kind, top, { history, copies }) {
+  const origin = history.kept.has(top) ? top : history.origins.get(top);
+  if (origin === undefined || !isNamed(origin, kind.name)) return null;
+  return copies().find((copy) => copy.from === origin) ?? null;
 }
 
 /**
- * The file entries of every base baseline of a kind, keyed from the top through git's renames: what an entry falls
- * back to when its own baseline never named its file. Two baselines naming one entry: the larger count.
- * @param {Kind} kind
- * @param {History} history
- * @returns {Map<string, number>}
+ * @typedef {object} BaseIndex the base entries an entry may fall back to
+ * @property {Map<string, number>} lend the entries that left their copy, with the count they carry
+ * @property {Map<string, { at: string, count: number }>} unsure the entries of a copy whose head file (at `at`, from the
+ *   top) cannot be read: it may still record them — up to the count it recorded at the base
  */
-function baseIndex(kind, history) {
-  /** @type {Map<string, number>} */
-  const index = new Map();
-  for (const { root, entries } of named(history.base, kind.name).map((path) => copyAt(kind, path, history))) {
-    for (const [key, count] of entries) {
+
+/**
+ * The file entries that left their base copy since — the copy is gone, or no longer records them at head —, keyed from
+ * the top through git's renames: what an entry falls back to when its own baseline never named its file. A file moved
+ * between baselines keeps its count; a second baseline naming a file the first still records gets none. Two copies
+ * naming one entry: the larger count.
+ * @param {Kind} kind
+ * @param {Copy[]} copies the kind's baselines at the base
+ * @param {History} history
+ * @returns {BaseIndex}
+ */
+function baseIndex(kind, copies, history) {
+  /** @type {BaseIndex} */
+  const index = { lend: new Map(), unsure: new Map() };
+  for (const copy of copies) {
+    const still = stillHeld(kind, copy, history);
+    for (const [key, count] of copy.entries) {
       if (partsOf(key)[0] === "") continue;
-      const where = topKey(key, root, history.moved);
-      index.set(where, Math.max(index.get(where) ?? 0, count));
+      const where = topKey(key, copy.root, history.moved);
+      if (still === null) index.unsure.set(where, { at: headPath(copy, history) ?? copy.from, count: Math.max(index.unsure.get(where)?.count ?? 0, count) });
+      else if (!still.has(where)) index.lend.set(where, Math.max(index.lend.get(where) ?? 0, count));
     }
   }
   return index;
+}
+
+/**
+ * What a base copy still records at head — where it is now, kept or moved by git —, keyed from the top: nothing when
+ * its baseline is gone; null when its head file cannot be read (it may still record anything, so it lends no count).
+ * @param {Kind} kind
+ * @param {Copy} copy
+ * @param {History} history
+ * @returns {Set<string> | null}
+ */
+function stillHeld(kind, copy, history) {
+  const now = headPath(copy, history);
+  if (now === undefined || !isNamed(now, kind.name)) return new Set();
+  const here = posix.relative(history.prefix.replace(/\/$/, "") || ".", now);
+  const root = rootOf(now, kind.name);
+  const keys = (/** @type {Map<string, number>} */ head) => [...head.keys()].map((key) => topKey(key, root));
+  /** @type {string[]} */
+  const said = [];
+  const held = readValue(() => new Set(keys(kind.entries(readFileSync(here, "utf8")))), said);
+  if (held === null) history.skipped.push(`${now} at head: ${firstLines(said)} — it lends no count to another baseline`);
+  return held;
+}
+
+/** @param {string[]} reasons @returns {string} each reason's first line (a parser may quote its input), joined */
+const firstLines = (reasons) => reasons.map((reason) => reason.split("\n")[0]).join("; ");
+
+/** @param {Copy} copy @param {History} history @returns {string | undefined} where it is at head: kept, or moved by git */
+const headPath = (copy, history) => (history.kept.has(copy.from) ? copy.from : history.moved.get(copy.from));
+
+/**
+ * Every file the kind's base copies record, from the top through git's renames: a new baseline naming one is held,
+ * never an adoption.
+ * @param {Copy[]} copies
+ * @param {History} history
+ * @returns {Set<string>}
+ */
+function recordedFiles(copies, history) {
+  const keys = copies.flatMap(({ root, entries }) => [...entries.keys()].map((key) => topKey(key, root, history.moved)));
+  return new Set(keys.map((key) => partsOf(key)[0]).filter((file) => file !== ""));
 }
 
 /**
@@ -284,25 +519,91 @@ function baseIndex(kind, history) {
  * @property {Copy | null} own its own base copy
  * @property {Copy[]} removed the base's baselines of its kind the head no longer tracks (when it has no own copy)
  * @property {string} root its root from the top
- * @property {() => Map<string, number>} index the kind's file entries from every base baseline
+ * @property {() => BaseIndex} index the kind's file entries from every base baseline
  * @property {History} history
  */
 
 /**
- * The base count a head entry answers to: its own baseline's — under the file's name at the base (git's rename
- * followed back) or its name now —, else, for a file its own never named, the kind's index; a file-less entry (a
- * rubocop setting) answers to its own todo, or to the largest of the removed ones'.
+ * @typedef {object} KindBase a kind's baselines at the base, read once per run
+ * @property {History} history
+ * @property {() => BaseIndex} index the file entries that left their copy, and those it cannot vouch for (baseIndex)
+ * @property {() => Set<string>} recorded every file the kind's base copies record (recordedFiles)
+ * @property {() => Copy[]} copies the kind's baselines at the base
+ */
+
+/**
+ * The count a head entry answers to at the base, or undefined when no copy it answers to holds it: its own baseline's
+ * — under the file's name at the base (git's rename followed back) or its name now —, else, for a file its own never
+ * named (and its own was read whole), the kind's index; a file-less entry (a rubocop setting) answers to its own todo,
+ * or to the largest of the removed ones'.
  * @param {string} key
  * @param {Scope} scope
- * @returns {number}
+ * @returns {number | undefined}
  */
-function baseCount(key, { own, removed, root, index, history }) {
+function baseEntry(key, scope) {
+  const { own, root, index, history } = scope;
   const [file, label] = partsOf(key);
-  if (file === "") return Math.max(0, ...(own ? [own] : removed).map((copy) => copy.entries.get(key) ?? 0));
+  if (file === "") {
+    const held = settingsCopies(scope).flatMap((copy) => copy.entries.get(key) ?? []);
+    return held.length > 0 ? Math.max(...held) : undefined;
+  }
   const path = posix.join(root, file);
   const inOwn = (/** @type {string} */ name) => own?.entries.get(keyOf(posix.relative(own.root || ".", name), label));
-  return inOwn(history.origins.get(path) ?? path) ?? inOwn(path) ?? index().get(keyOf(path, label)) ?? 0;
+  const owned = inOwn(history.origins.get(path) ?? path) ?? inOwn(path);
+  return owned !== undefined || own?.partial ? owned : index().lend.get(keyOf(path, label)); // read in part: maybe its own
 }
+
+/**
+ * The base copies read in part that could name a file: a copy names files under its root only, and the file's base
+ * path follows git's renames back.
+ * @param {KindBase} base
+ * @param {string} path a file from the top, as the head names it
+ * @returns {Copy[]}
+ */
+function unreadFor(base, path) {
+  const atBase = base.history.origins.get(path) ?? path;
+  return base.copies().filter((copy) => copy.partial && atBase.startsWith(copy.root));
+}
+
+/**
+ * The copies read in part that could hold an entry the base answered nothing for: a file's (its own copy, unreadFor),
+ * or for a file-less entry its own todo or the removed ones.
+ * @param {string} key
+ * @param {Scope} scope
+ * @param {KindBase} base
+ * @returns {Copy[]}
+ */
+function unreadOf(key, scope, base) {
+  const [file] = partsOf(key);
+  if (file === "") return settingsCopies(scope).filter((copy) => copy.partial);
+  const own = scope.own?.partial ? [scope.own] : []; // it may hold the file under its head name too
+  return [...own, ...unreadFor(base, posix.join(scope.root, file))];
+}
+
+/** @param {Scope} scope @returns {Copy[]} the todos a file-less entry answers to: its own, else the removed ones */
+const settingsCopies = (scope) => (scope.own ? [scope.own] : scope.removed);
+
+/**
+ * Why an entry absent from the base may not be growth: a copy read in part may hold it, or a copy unreadable at head
+ * may still record it up to the count it had (above that count it grew whatever that copy holds now); null when
+ * nothing could.
+ * @param {string} key
+ * @param {number} count the head's
+ * @param {Scope} scope
+ * @param {KindBase} base
+ * @returns {string | null}
+ */
+function doubtOf(key, count, scope, base) {
+  const unread = unreadOf(key, scope, base);
+  if (unread.length > 0) return `${namesOf(unread)} at the base was read in part (said above) and may hold it`;
+  const [file, label] = partsOf(key);
+  const unsure = file === "" ? undefined : base.index().unsure.get(keyOf(posix.join(scope.root, file), label));
+  if (unsure === undefined || count > unsure.count) return null;
+  return `${unsure.at} cannot be read at head (said above) and may still record it`;
+}
+
+/** @param {Copy[]} copies @returns {string} */
+const namesOf = (copies) => [...new Set(copies.map((copy) => copy.from))].join(", ");
 
 /**
  * Every baseline moved since the base to a path its tools do not read it under: the ratchet would not see it either.
@@ -318,63 +619,148 @@ function movedAway(moved) {
 }
 
 /**
- * What a head baseline is held to, or null for an adoption: one with no base copy is an adoption only when the change
- * removed no baseline of its kind and the base recorded none of its files (a moved, merged or split baseline is held).
+ * What a head baseline is held to, or null for a new one: no base copy, no baseline of its kind removed, none of its
+ * files recorded by the base (a moved, merged or split baseline is held).
  * @param {Kind} kind
  * @param {string} top
  * @param {Map<string, number>} head
- * @param {{ history: History, index: () => Map<string, number> }} base
+ * @param {KindBase} base
  * @returns {Scope | null}
  */
-function scopeOf(kind, top, head, { history, index }) {
-  const own = ownCopy(kind, top, history);
+function scopeOf(kind, top, head, base) {
+  const { history, index } = base;
+  const own = ownCopy(kind, top, base);
   const root = rootOf(top, kind.name);
-  const removed = own ? [] : named(history.base, kind.name).filter((path) => !history.kept.has(path));
-  const recorded = [...head.keys()].some((key) => partsOf(key)[0] !== "" && index().has(topKey(key, root)));
+  const gone = (/** @type {Copy} */ copy) => !history.kept.has(copy.from) && !history.moved.has(copy.from); // not moved by git
+  const removed = own ? [] : base.copies().filter(gone);
+  const files = base.recorded();
+  const recorded = [...head.keys()].some((key) => partsOf(key)[0] !== "" && files.has(partsOf(topKey(key, root))[0]));
   if (!own && removed.length === 0 && !recorded) return null;
-  return { own, removed: removed.map((path) => copyAt(kind, path, history)), root, index, history };
+  return { own, removed, root, index, history };
+}
+
+/**
+ * @typedef {{ problems: string[], adoption: string | null, unknowns: string[] }} Comparison one baseline's verdict: its
+ *   growth, the adoption said, and the entries that cannot be told (a copy read in part may hold them)
+ */
+
+/**
+ * Why a head baseline is held to what it is, for its growth messages ("" when it is held to its own base copy).
+ * @param {Scope} scope
+ * @param {string} top the baseline's path from the top
+ * @returns {string}
+ */
+function heldNote(scope, top) {
+  const moved = scope.own && scope.own.from !== top ? [`${scope.own.from}, moved here`] : [];
+  const notes = [...moved, ...scope.removed.map(({ from }) => `${from}, removed here`)];
+  return notes.length === 0 ? "" : ` (held to ${notes.join("; ")})`;
 }
 
 /**
  * One tracked baseline against what its entries answer to; an adoption is said (never silent).
  * @param {Kind} kind
  * @param {string} path relative to the working directory
- * @param {{ history: History, index: () => Map<string, number> }} base
- * @returns {{ problems: string[], adoption: string | null }}
+ * @param {KindBase} base
+ * @returns {Comparison}
  */
 function compare(kind, path, base) {
   const top = posix.join(base.history.prefix, path);
   const head = kind.entries(readFileSync(path, "utf8"));
   const scope = scopeOf(kind, top, head, base);
-  if (scope === null) {
-    const adoption = `${path} is new at ${base.history.ref} (an adoption, ${kind.measure(head)}): review its entries`;
-    return { problems: [], adoption };
+  if (scope === null) return newBaseline(kind, path, top, head, base);
+  const held = heldNote(scope, top);
+  /** @type {Comparison} */
+  const verdict = { problems: [], adoption: null, unknowns: [] };
+  for (const [key, count] of head) {
+    const was = baseEntry(key, scope);
+    if (count <= (was ?? 0)) continue; // no rise (an enabled cop weighs 0)
+    const doubt = was === undefined ? doubtOf(key, count, scope, base) : null;
+    const shown = `${kind.show(...partsOf(key))} (${count})`;
+    if (doubt === null) verdict.problems.push(`${path}: grew: ${shown}${held} — fix the code; a baseline only shrinks`);
+    else verdict.unknowns.push(`${path}: ${shown} — ${doubt}: fix the code, or make that copy readable first`);
   }
-  const elsewhere = [scope.own?.from ?? "", ...scope.removed.map(({ from }) => from)].filter((from) => from && from !== top);
-  const held = elsewhere.length === 0 ? "" : ` (held to ${elsewhere.join(", ")}, removed here)`;
-  const rose = [...head].filter(([key, count]) => count > baseCount(key, scope));
-  const problems = rose.map(
-    ([key, count]) => `${path}: grew: ${kind.show(...partsOf(key))} (${count})${held} — fix the code; a baseline only shrinks`,
-  );
-  return { problems, adoption: null };
+  return verdict;
 }
 
 /**
- * Every baseline that grew against the base, or was moved where it is not read; and every adoption.
+ * A baseline the base has no copy of: an adoption — unless a base copy of its kind read in part could have named its
+ * files (a copy names files under its root only; a file's base path follows git's renames back), which is cannot-tell.
+ * @param {Kind} kind
+ * @param {string} path relative to the working directory
+ * @param {string} top from the top
+ * @param {Map<string, number>} head
+ * @param {KindBase} base
+ * @returns {Comparison}
+ */
+function newBaseline(kind, path, top, head, base) {
+  const root = rootOf(top, kind.name);
+  const files = [...head.keys()].map((key) => partsOf(key)[0]).filter((file) => file !== "");
+  const unread = files.flatMap((file) => unreadFor(base, posix.join(root, file)));
+  if (unread.length > 0) {
+    const unknown = `${path} is new, and ${namesOf(unread)} at the base was read in part (said above): its files may be recorded there — make that copy readable first`;
+    return { problems: [], adoption: null, unknowns: [unknown] };
+  }
+  const adoption = `${path} is new since ${base.history.name} (an adoption, ${kind.measure(head)}): review its entries`;
+  return { problems: [], adoption, unknowns: [] };
+}
+
+/**
+ * One baseline's verdict, or — when it cannot be read — a cannot-tell of its own: every other baseline is still told.
+ * @param {() => Comparison} tell
+ * @param {string} path
+ * @returns {Comparison}
+ */
+function toldOrNot(tell, path) {
+  /** @type {string[]} */
+  const unknowns = [];
+  return toldAt(path, tell, unknowns) ?? { problems: [], adoption: null, unknowns };
+}
+
+/**
+ * A check's result, or — when it cannot tell — null with its reason said under `where` (a defect still throws).
+ * @template T
+ * @param {string} where what the reason is about
+ * @param {() => T} tell
+ * @param {string[]} unknowns
+ * @returns {T | null}
+ */
+function toldAt(where, tell, unknowns) {
+  /** @type {string[]} */
+  const said = [];
+  const told = readValue(tell, said);
+  unknowns.push(...said.map((reason) => `${where}: ${firstLines([reason])}`));
+  return told;
+}
+
+/**
+ * Every baseline that grew against the base, or was moved where it is not read; every adoption; every new baseline
+ * that cannot be told from one (a base copy read in part could have named its files).
  * @param {History} history
  * @param {string[]} tracked the baselines under the working directory are the ones checked
- * @returns {{ problems: string[], adoptions: string[] }}
+ * @returns {{ problems: string[], adoptions: string[], unknowns: string[] }}
  */
 function growth(history, tracked) {
   const results = KINDS.flatMap((kind) => {
-    /** @type {Map<string, number> | undefined} */
+    /** @type {Copy[] | undefined} */
+    let copies;
+    const all = () => (copies ??= named(history.base, kind.name).map((path) => copyAt(kind, path, history)));
+    /** @type {BaseIndex | undefined} */
     let index;
-    const base = { history, index: () => (index ??= baseIndex(kind, history)) };
-    return named(tracked, kind.name).map((path) => compare(kind, path, base));
+    /** @type {Set<string> | undefined} */
+    let recorded;
+    /** @type {KindBase} */
+    const base = {
+      history,
+      index: () => (index ??= baseIndex(kind, all(), history)),
+      recorded: () => (recorded ??= recordedFiles(all(), history)),
+      copies: all,
+    };
+    return named(tracked, kind.name).map((path) => toldOrNot(() => compare(kind, path, base), path));
   });
   return {
     problems: [...movedAway(history.moved), ...results.flatMap(({ problems }) => problems)],
     adoptions: results.flatMap(({ adoption }) => (adoption === null ? [] : [adoption])),
+    unknowns: results.flatMap(({ unknowns }) => unknowns),
   };
 }
 
@@ -387,21 +773,22 @@ function growth(history, tracked) {
  */
 export function measuredDuplicates(reportPath) {
   const report = JSON.parse(readFileSync(reportPath, "utf8"));
-  if (!report.statistics?.total?.sources) {
+  if (!report?.statistics?.total?.sources) {
     throw new Error(`${reportPath}: jscpd analyzed no files — check its paths and ignore patterns`);
   }
   if (!Array.isArray(report.duplicates)) throw new Error(`${reportPath}: no duplicates list — not a jscpd JSON report`);
   /** @type {Map<string, Set<number>>} */
   const covered = new Map();
-  for (const clone of report.duplicates) [clone.firstFile, clone.secondFile].forEach((side) => cover(covered, side));
+  for (const clone of report.duplicates) [clone?.firstFile, clone?.secondFile].forEach((side) => cover(covered, side));
   return new Map([...covered].sort(([a], [b]) => a.localeCompare(b)).map(([file, lines]) => [file, lines.size]));
 }
 
 /**
  * @param {Map<string, Set<number>>} covered
- * @param {{ name: string, start: unknown, end: unknown }} side one file of a clone
+ * @param {unknown} side one file of a clone ({ name, start, end }), as the report holds it
  */
 function cover(covered, side) {
+  if (!isMap(side) || typeof side.name !== "string") throw new Error("a clone without its two files — not a jscpd JSON report");
   const file = isAbsolute(side.name) ? relative(process.cwd(), side.name) : side.name;
   const lines = covered.get(file) ?? new Set();
   const [start, end] = [countOf(side.start, `${file}: start`), countOf(side.end, `${file}: end`)];
@@ -426,12 +813,13 @@ function holdProblems(reportPath, { prefix, moved }) {
   const here = (/** @type {string} */ key) => keyOf(posix.relative(prefix || ".", partsOf(topKey(key, prefix, moved))[0]), "");
   const recorded = new Map([...written].map(([key, lines]) => [here(key), lines]));
   const rose = perFile(grown(recorded, measured));
-  if (rose.length > 0) return rose.map((entry) => `a new repeat of ≥ 10 lines in ${entry} — list them: jscpd --reporters console`);
   const fell = perFile(grown(measured, recorded));
-  if (fell.length > 0) return [`${DUPLICATES} records more than jscpd measures (${fell.join(", ")}): lower it — --write-duplicates ${reportPath}`];
   const stale = [...written.keys()].map((key) => partsOf(key)[0]).filter((file) => moved.has(posix.join(prefix, file)));
-  if (stale.length > 0) return [`${DUPLICATES} names renamed files (${stale.join(", ")}): record their new names — --write-duplicates ${reportPath}`];
-  return [];
+  return [
+    ...rose.map((entry) => `a new repeat (over .jscpd.json's floors) in ${entry} — list them: jscpd --reporters console`),
+    ...(fell.length ? [`${DUPLICATES} records more than jscpd measures (${fell.join(", ")}): lower it — --write-duplicates ${reportPath}`] : []),
+    ...(stale.length ? [`${DUPLICATES} names renamed files (${stale.join(", ")}): record their new names — --write-duplicates ${reportPath}`] : []),
+  ];
 }
 
 /** @param {string} reportPath @returns {string} the baseline jscpd's report gives, per file and in total */
@@ -443,7 +831,7 @@ function duplicatesBaseline(reportPath) {
 /** @param {string[]} tracked @returns {{ sizes: Record<string, number>, unreadable: string[] }} */
 function counts(tracked) {
   /** @type {Record<string, number>} */
-  const sizes = { eslint: 0, rubocop: 0, legacy: 0, duplicates: 0 };
+  const sizes = Object.fromEntries(KINDS.map(({ key }) => [key, 0]));
   /** @type {string[]} */
   const unreadable = [];
   for (const { key, name, entries, measure } of KINDS) {
@@ -471,7 +859,7 @@ function presetProblems() {
   const lines = lockLines(readFileSync(LOCK, "utf8"));
   const listed = new Set(lines.map(([, path]) => path));
   const unlisted = present.filter((path) => !listed.has(path)).map((path) => `${path} is not in ${LOCK}`);
-  return [...unlisted, ...lines.flatMap(([sum, path]) => copyProblems(sum, path))];
+  return [...unlisted, ...lines.flatMap(([expected, path]) => copyProblems(expected, path))];
 }
 
 /** @param {string} text @returns {[string, string][]} each line's sha256 and path */
@@ -484,48 +872,116 @@ function lockLines(text) {
   });
 }
 
-/** @param {string} sum @param {string} path @returns {string[]} */
-function copyProblems(sum, path) {
+/** @param {string} expected the list's sha256 @param {string} path @returns {string[]} */
+function copyProblems(expected, path) {
   if (!existsSync(path)) return [];
-  const actual = createHash("sha256").update(readFileSync(path)).digest("hex");
-  if (actual === sum) return [];
+  const text = readFileSync(path, "utf8").replace(/\r\n/g, "\n"); // a CRLF checkout (core.autocrlf) is the same preset
+  const actual = createHash("sha256").update(text).digest("hex");
+  if (actual === expected) return [];
   return [`${path} differs from the preset it copies (${LOCK}): edit it where the presets are kept, never here`];
 }
 
 /**
+ * The commit a GitHub push event moved the branch from: on a push to main, origin/main is the pushed commit itself, so
+ * the push is compared with what the branch held before it. None for another event, a new or deleted branch or no
+ * event file; an event file that cannot be read is cannot-tell.
+ * @returns {string | null}
+ */
+function pushedFrom() {
+  const file = process.env["GITHUB_EVENT_PATH"];
+  if (process.env["GITHUB_EVENT_NAME"] !== "push" || !file) return null;
+  const event = JSON.parse(readFileSync(file, "utf8"));
+  if (!isMap(event)) throw new Error(`${file}: the push event is no JSON object`);
+  const before = String(event.before ?? "");
+  if (event.deleted === true) return null; // a deleted branch: nothing was pushed to compare
+  return /^[0-9a-f]{40}$/.test(before) && !/^0+$/.test(before) ? before : null;
+}
+
+const VALUED = new Set(["--base", "--duplicates", "--write-duplicates"]);
+const ARGS = new Set([...VALUED, "--counts"]);
+
+/**
  * @param {string[]} argv
- * @returns {{ base: string, duplicates: string | null, write: string | null, counts: boolean }}
+ * @returns {{ base: string | null, duplicates: string | null, write: string | null, counts: boolean }}
  */
 export function parseArgs(argv) {
+  const usage = "usage: [--base <ref>] [--duplicates <report>] | --write-duplicates <report> | --counts";
+  const unknown = argv.filter((arg, i) => !ARGS.has(arg) && !VALUED.has(at(argv, i - 1)));
+  if (unknown.length > 0) throw new Error(`unknown argument ${unknown.join(" ")} — ${usage}`);
+  const twice = [...ARGS].filter((flag) => argv.filter((arg) => arg === flag).length > 1);
+  if (twice.length > 0) throw new Error(`${twice.join(" ")} given twice — ${usage}`);
   const value = (/** @type {string} */ flag) => {
     if (!argv.includes(flag)) return null;
     const given = argv[argv.indexOf(flag) + 1];
     if (given === undefined || given === "" || given.startsWith("--")) throw new Error(`${flag} needs a value`);
     return given;
   };
-  const pr = process.env["GITHUB_BASE_REF"];
-  return {
-    base: value("--base") ?? (process.env["BASELINE_RATCHET_BASE"] || (pr ? `origin/${pr}` : "origin/main")),
-    duplicates: value("--duplicates"),
-    write: value("--write-duplicates"),
-    counts: argv.includes("--counts"),
-  };
+  return { base: value("--base"), duplicates: value("--duplicates"), write: value("--write-duplicates"), counts: argv.includes("--counts") };
 }
 
-/** @param {{ base: string, duplicates: string | null }} options @returns {number} */
-function check(options) {
+/**
+ * The base a check compares with: --base, else $BASELINE_RATCHET_BASE, else origin/$GITHUB_BASE_REF in a pull request,
+ * else the commit a push moved the branch from, else origin/main.
+ * @param {string | null} named
+ * @returns {{ ref: string, pushed: boolean }} the base, and whether a push event named it
+ */
+function baseOf(named) {
+  const pr = process.env["GITHUB_BASE_REF"];
+  const given = named ?? (process.env["BASELINE_RATCHET_BASE"] || (pr ? `origin/${pr}` : null));
+  if (given !== null) return { ref: given, pushed: false };
+  const before = pushedFrom();
+  return before === null ? { ref: "origin/main", pushed: false } : { ref: before, pushed: true };
+}
+
+/**
+ * The commit the branch left the base at (a pull request merge commit's merge base is the base itself): a baseline the
+ * base lowered after the branch left it is no growth of the branch.
+ * @param {{ ref: string, pushed: boolean }} base
+ * @returns {string}
+ */
+function forkOf({ ref: base, pushed }) {
   try {
-    git("rev-parse", "--verify", "--quiet", `${options.base}^{commit}`);
-  } catch {
-    throw new Error(`base ${options.base} not found — fetch it (CI: fetch-depth: 0)`);
+    git("rev-parse", "--verify", "--quiet", `${base}^{commit}`);
+  } catch (error) {
+    const said = String(/** @type {{ stderr?: unknown }} */ (error).stderr ?? "").trim().split("\n")[0];
+    const forced = pushed ? "; a force push discards the commit it replaced — name the base (BASELINE_RATCHET_BASE)" : "";
+    throw new Error(said ? `git: ${said}${forced}` : `base ${base} not found — fetch it (CI: fetch-depth: 0)${forced}`, { cause: error });
   }
-  const history = historyOf(options.base);
-  const hold = options.duplicates === null ? [] : holdProblems(options.duplicates, history);
-  const { problems, adoptions } = growth(history, trackedFiles());
-  const all = [...problems, ...hold, ...presetProblems()];
+  try {
+    return git("merge-base", "HEAD", base).trim();
+  } catch (error) {
+    throw new Error(`no merge base of HEAD and ${base} — fetch the history (CI: fetch-depth: 0)`, { cause: error });
+  }
+}
+
+/**
+ * Every verdict of a run: the growth, the hold and the lock (what does not hold), the adoptions, and every cannot-tell
+ * — the return is built after every reader ran, so none is left out.
+ * @param {History} history
+ * @param {string | null} report jscpd's report, or null for no hold
+ * @returns {{ problems: string[], adoptions: string[], unknowns: string[] }}
+ */
+function verdicts(history, report) {
+  /** @type {string[]} */
+  const unknowns = [];
+  const hold = report === null ? [] : (toldAt("the duplicates hold", () => holdProblems(report, history), unknowns) ?? []);
+  const lock = toldAt("the presets list", presetProblems, unknowns) ?? [];
+  const told = growth(history, trackedFiles());
+  return { problems: [...told.problems, ...hold, ...lock], adoptions: told.adoptions, unknowns: [...unknowns, ...told.unknowns] };
+}
+
+/** @param {{ base: string | null, duplicates: string | null }} options @returns {number} */
+function check(options) {
+  const base = baseOf(options.base);
+  const history = historyOf(forkOf(base), base.ref);
+  const { problems: all, adoptions, unknowns } = verdicts(history, options.duplicates);
   for (const note of adoptions) console.log(`baseline-ratchet: ${note}`);
+  // beside the verdicts it explains (stderr), not with the adoption notes
+  for (const note of new Set(history.skipped)) console.error(`baseline-ratchet: left out: ${note}`);
   for (const problem of all) console.error(`baseline-ratchet: ${problem}`);
-  return all.length === 0 ? 0 : 1;
+  for (const unknown of unknowns) console.error(`baseline-ratchet: cannot tell — ${unknown}`);
+  if (all.length > 0) return 1; // a definite refusal is never read as an unverified run
+  return unknowns.length > 0 ? 2 : 0;
 }
 
 /** @param {string[]} argv @returns {number} the exit code */
@@ -545,9 +1001,20 @@ export function main(argv) {
   } catch (error) {
     const reason = error instanceof Error ? error.message.split("\n")[0] : String(error);
     console.error(`baseline-ratchet: cannot tell — ${reason}`);
+    if (isDefect(error) && error instanceof Error) console.error(error.stack); // a defect of this file: where it is
     return 2;
   }
 }
 
-const invoked = process.argv[1] ? realpathSync(process.argv[1]) : "";
-if (invoked === realpathSync(fileURLToPath(import.meta.url))) process.exitCode = main(process.argv.slice(2));
+/** @returns {boolean} whether this file is the program node runs (not a module another file imports) */
+function isProgram() {
+  const self = fileURLToPath(import.meta.url);
+  const started = process.argv[1] ?? "";
+  try {
+    return Boolean(started) && realpathSync(started) === realpathSync(self);
+  } catch {
+    return resolve(started) === self; // a path realpath cannot resolve still names this file when node started it
+  }
+}
+
+if (isProgram()) process.exitCode = main(process.argv.slice(2));
