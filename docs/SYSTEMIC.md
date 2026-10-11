@@ -29,7 +29,7 @@ There is no shared test helper yet; the first one goes in `test/support/` and is
 leaves it in that PR, the rest of a touched file in the next PR; after a rebase a conflicting
 `eslint-suppressions.json` is regenerated (the base's file, then `npx eslint --prune-suppressions`) and a conflicting `jscpd-baseline.json` re-recorded (the base's file, then `--write-duplicates`), never merged by hand; the ratchet refuses whatever grew. A jscpd version bump can move the measured lines: that PR re-records the baseline with `--write-duplicates`, reviewed like a baseline cleanup.
 
-A suppression is a count per file and rule: a new violation of a rule in a file that already has suppressed ones
+`npm run lint` takes no arguments: ESLint's own flags (`--fix`, a file list) go to `npx eslint`. A suppression is a count per file and rule: a new violation of a rule in a file that already has suppressed ones
 passes while another is fixed in the same PR — the count is the only guard there, so the self-review reads the
 touched functions. `eslint-suppressions.json` is marked `linguist-generated` (a review packet carries it as data,
 last): the ratchet holds it after adoption, and the adoption PR names its counts.
