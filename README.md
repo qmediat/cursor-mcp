@@ -28,7 +28,7 @@ MCP server for the [Cursor CLI](https://cursor.com/docs/cli) (`cursor-agent`): r
 
 ### Prerequisites
 
-1. **Node.js >= 22.0.0**
+1. **Node.js >= 22.0.0** (developing it — `npm run lint`'s Babel 8 — needs 22.18 or 24.11)
 2. **Cursor CLI** installed and authenticated:
 
 ```bash
@@ -266,6 +266,7 @@ git clone https://github.com/qmediat/cursor-mcp.git
 cd cursor-mcp
 npm install
 npm run build
+npm run lint   # structure rules, repeated blocks, the baseline ratchet (docs/SYSTEMIC.md §1)
 node dist/index.js
 ```
 

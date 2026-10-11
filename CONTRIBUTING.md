@@ -17,7 +17,7 @@ bundled TypeScript.
 
 ### Prerequisites
 
-- Node.js >= 22.0.0
+- Node.js >= 22.0.0 to run it; >= 22.18 (or >= 24.11) to develop it — the lint toolchain's Babel 8 needs it
 - cursor-agent CLI installed and authenticated (`cursor-agent login`)
 
 ### Local Testing
@@ -79,6 +79,9 @@ src/
 - Explicit return types on exported functions
 - Zod v4 for all input validation
 - `z.describe()` on all tool parameters (for LLM discoverability)
+- `npm run lint` before a pull request: the structure rules (function length, complexity, nesting, a reason on every
+  disable directive, no bare `assert.throws(fn)`, no test without an assertion), repeated blocks and the baseline
+  ratchet — `docs/SYSTEMIC.md` §1, with the files new code follows
 
 ## License
 

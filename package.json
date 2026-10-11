@@ -24,7 +24,8 @@
     "pretest": "npm run build",
     "test": "node --test",
     "prepack": "npm run build",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "lint": "eslint . && jscpd --config .jscpd.json && node lint/baseline-ratchet.mjs --duplicates .jscpd-report/jscpd-report.json"
   },
   "keywords": [
     "mcp",
@@ -52,7 +53,12 @@
     "zod": "4.6.5"
   },
   "devDependencies": {
+    "@babel/core": "8.0.6",
+    "@babel/eslint-parser": "8.0.6",
+    "@eslint-community/eslint-plugin-eslint-comments": "4.8.1",
     "@types/node": "22.20.5",
+    "eslint": "10.12.0",
+    "jscpd": "5.3.2",
     "typescript": "7.0.2"
   },
   "engines": {
