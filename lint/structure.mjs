@@ -26,7 +26,7 @@ const THROWS_CALLS = [
 const NO_EXPECTED_ERROR = [
   "[arguments.length<2]",
   "[arguments.length>=2][arguments.1.type='Identifier'][arguments.1.name='undefined']",
-  "[arguments.length>=3][arguments.1.type='Literal'][arguments.1.raw='null']", // two arguments: the Literal rule below
+  "[arguments.length>=3][arguments.1.type='Literal'][arguments.1.raw='null']", // null alone (two) is the Literal rule's, below
   "[arguments.length=2][arguments.1.type='TemplateLiteral']",
   "[arguments.length=2][arguments.1.type='Literal']:not([arguments.1.regex])",
 ];
