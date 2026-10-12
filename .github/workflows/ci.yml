@@ -27,7 +27,7 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
-      - name: Structure lint (the shared preset, repeats, the baseline ratchet — docs/SYSTEMIC.md §1)
+      - name: Lint — formatting, structure, repeats, the baseline ratchet (docs/SYSTEMIC.md §1)
         run: npm run lint
       - run: npm run typecheck
       - run: npm test

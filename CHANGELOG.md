@@ -10,7 +10,7 @@
 - Development only: the cancellation tests set the fake's flags, spawn the test server and check the helper's
   deadline kill through one helper each, so the formatter adopted next adds no repeated block; the 48 duplicate lines
   recorded for `test/cancel.test.mjs` are gone.
-- Development only: Prettier formats the code (`npm run format`; CI runs `npm run format:check`), printWidth 120 —
+- Development only: Prettier formats the code (`npm run format`; `npm run lint` checks it, in CI too), printWidth 120 —
   the style the code already had; the code was reformatted once, in the same pull request, which
   `.git-blame-ignore-revs` names for `git blame`.
 - Internal: every tool handler's failure becomes the tool's error result through one helper (`guarded`, src/server.ts)
