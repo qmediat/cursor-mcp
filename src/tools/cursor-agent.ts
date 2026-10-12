@@ -7,9 +7,13 @@ import { buildReport, observerFor, toCallToolResult, type ToolExtra } from "../r
 import { sessionStore } from "../session-store.js";
 
 export const cursorAgentInputSchema = z.object({
-  prompt: z.string().min(1).max(100_000).describe(
-    "The prompt or task for the Cursor agent. Supports natural language instructions for code generation, review, debugging, and more.",
-  ),
+  prompt: z
+    .string()
+    .min(1)
+    .max(100_000)
+    .describe(
+      "The prompt or task for the Cursor agent. Supports natural language instructions for code generation, review, debugging, and more.",
+    ),
   model: CursorModel.optional().describe(
     "AI model id as cursor-agent accepts it, passed through to --model (any id cursor_models lists; e.g. a Composer, Claude, GPT, Gemini or Grok id on your plan). Default: auto (Cursor picks the model). Was a closed list of old ids before 1.1.0.",
   ),
@@ -19,9 +23,13 @@ export const cursorAgentInputSchema = z.object({
   workspace: CursorWorkspace.optional().describe(
     "Working directory for the agent. Affects file search scope and project context. Default: server's current working directory.",
   ),
-  timeout_seconds: z.number().int().min(10).max(3600).optional().describe(
-    "Maximum execution time in seconds (10-3600). Default: 600 (10 minutes).",
-  ),
+  timeout_seconds: z
+    .number()
+    .int()
+    .min(10)
+    .max(3600)
+    .optional()
+    .describe("Maximum execution time in seconds (10-3600). Default: 600 (10 minutes)."),
 });
 
 export type CursorAgentArgs = z.infer<typeof cursorAgentInputSchema>;

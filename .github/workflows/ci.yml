@@ -29,6 +29,8 @@ jobs:
       - run: npm ci
       - name: Structure lint (the shared preset, repeats, the baseline ratchet — docs/SYSTEMIC.md §1)
         run: npm run lint
+      - name: Formatting (Prettier — docs/SYSTEMIC.md §1)
+        run: npm run format:check
       - run: npm run typecheck
       - run: npm test
       - run: npm audit --omit=dev --audit-level=high

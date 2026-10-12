@@ -9,20 +9,96 @@ import { test } from "node:test";
 
 const dir = await mkdtemp(join(tmpdir(), "cursor-mcp-stream-"));
 const EVENTS = [
-  { type: "system", subtype: "init", apiKeySource: "login", cwd: "/w", session_id: "s-1", model: "Composer 2.5", permissionMode: "default" },
+  {
+    type: "system",
+    subtype: "init",
+    apiKeySource: "login",
+    cwd: "/w",
+    session_id: "s-1",
+    model: "Composer 2.5",
+    permissionMode: "default",
+  },
   { type: "user", message: { role: "user", content: [{ type: "text", text: "fix it" }] }, session_id: "s-1" },
-  { type: "tool_call", subtype: "started", call_id: "c1", tool_call: { readToolCall: { args: { path: "src/a.ts" } } }, session_id: "s-1" },
-  { type: "tool_call", subtype: "completed", call_id: "c1", tool_call: { readToolCall: { args: { path: "src/a.ts" }, result: { success: { content: "x", isEmpty: false, exceededLimit: false, totalLines: 1, totalChars: 1 } } } }, session_id: "s-1" },
-  { type: "tool_call", subtype: "completed", call_id: "c2", tool_call: { editToolCall: { args: { path: "src/a.ts" }, result: { success: {} } } }, session_id: "s-1" },
-  { type: "tool_call", subtype: "completed", call_id: "c3", tool_call: { writeToolCall: { args: { path: "src/b.ts" }, result: { success: {} } } }, session_id: "s-1" },
-  { type: "tool_call", subtype: "completed", call_id: "c4", tool_call: { editToolCall: { args: { path: "src/a.ts" }, result: { success: {} } } }, session_id: "s-1" },
-  { type: "tool_call", subtype: "completed", call_id: "c5", tool_call: { editToolCall: { args: { path: "src/c.ts" }, result: { rejected: { reason: "no --force" } } } }, session_id: "s-1" },
-  { type: "tool_call", subtype: "completed", call_id: "c6", tool_call: { shellToolCall: { args: { command: "rm -f src/d.ts" }, result: { success: {} } } }, session_id: "s-1" },
-  { type: "tool_call", subtype: "completed", call_id: "c7", tool_call: { writeToolCall: { args: { path: "src/e.ts" }, result: { success: false } } }, session_id: "s-1" },
-  { type: "tool_call", subtype: "completed", call_id: "c8", tool_call: { editToolCall: { args: { path: "src/c.ts" }, result: { success: { applied: true } } } }, session_id: "s-1" },
+  {
+    type: "tool_call",
+    subtype: "started",
+    call_id: "c1",
+    tool_call: { readToolCall: { args: { path: "src/a.ts" } } },
+    session_id: "s-1",
+  },
+  {
+    type: "tool_call",
+    subtype: "completed",
+    call_id: "c1",
+    tool_call: {
+      readToolCall: {
+        args: { path: "src/a.ts" },
+        result: { success: { content: "x", isEmpty: false, exceededLimit: false, totalLines: 1, totalChars: 1 } },
+      },
+    },
+    session_id: "s-1",
+  },
+  {
+    type: "tool_call",
+    subtype: "completed",
+    call_id: "c2",
+    tool_call: { editToolCall: { args: { path: "src/a.ts" }, result: { success: {} } } },
+    session_id: "s-1",
+  },
+  {
+    type: "tool_call",
+    subtype: "completed",
+    call_id: "c3",
+    tool_call: { writeToolCall: { args: { path: "src/b.ts" }, result: { success: {} } } },
+    session_id: "s-1",
+  },
+  {
+    type: "tool_call",
+    subtype: "completed",
+    call_id: "c4",
+    tool_call: { editToolCall: { args: { path: "src/a.ts" }, result: { success: {} } } },
+    session_id: "s-1",
+  },
+  {
+    type: "tool_call",
+    subtype: "completed",
+    call_id: "c5",
+    tool_call: { editToolCall: { args: { path: "src/c.ts" }, result: { rejected: { reason: "no --force" } } } },
+    session_id: "s-1",
+  },
+  {
+    type: "tool_call",
+    subtype: "completed",
+    call_id: "c6",
+    tool_call: { shellToolCall: { args: { command: "rm -f src/d.ts" }, result: { success: {} } } },
+    session_id: "s-1",
+  },
+  {
+    type: "tool_call",
+    subtype: "completed",
+    call_id: "c7",
+    tool_call: { writeToolCall: { args: { path: "src/e.ts" }, result: { success: false } } },
+    session_id: "s-1",
+  },
+  {
+    type: "tool_call",
+    subtype: "completed",
+    call_id: "c8",
+    tool_call: { editToolCall: { args: { path: "src/c.ts" }, result: { success: { applied: true } } } },
+    session_id: "s-1",
+  },
   { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Done." }] }, session_id: "s-1" },
   "this line is not JSON",
-  { type: "result", subtype: "success", is_error: false, duration_ms: 1234, duration_api_ms: 1000, result: "Done.", session_id: "s-1", request_id: "r-9" },
+  {
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    duration_ms: 1234,
+    duration_api_ms: 1000,
+    result: "Done.",
+    session_id: "s-1",
+    request_id: "r-9",
+  },
 ];
 /** Writes the one fake the executor resolves (it caches the binary's path): the given lines, strings as-is, objects
  * as JSON, optionally split at a byte offset with a pause between the halves. */
@@ -66,7 +142,11 @@ test("cursor_agent reports the model, the files changed (once each) and the answ
   assert.equal(s.model, "Composer 2.5");
   assert.equal(s.duration_ms, 1234);
   assert.equal(s.tool_calls, 8, "completed tool calls, started ones not counted twice");
-  assert.deepEqual(s.files_changed, ["src/a.ts", "src/b.ts", "src/c.ts"], "write/edit targets whose success is a value, each once; c.ts succeeded later and left the proposed list");
+  assert.deepEqual(
+    s.files_changed,
+    ["src/a.ts", "src/b.ts", "src/c.ts"],
+    "write/edit targets whose success is a value, each once; c.ts succeeded later and left the proposed list",
+  );
   assert.deepEqual(s.files_proposed, ["src/e.ts"], "success: false is not applied");
   assert.equal(s.noise_lines, 1, "the non-JSON line is counted, never dropped");
   assert.deepEqual(s.noise_sample, ["this line is not JSON"]);
@@ -76,16 +156,31 @@ test("cursor_agent reports the model, the files changed (once each) and the answ
   assert.ok(text.includes("Files changed:\n  src/a.ts\n  src/b.ts"));
   assert.ok(text.includes("not applied (no --force, refused or failed):\n  src/e.ts"));
   assert.ok(text.includes("Non-event stdout lines: 1"));
-  assert.equal(notifications.length, 10, "one per interpreted event: init, 8 completed tool calls, 1 assistant message");
+  assert.equal(
+    notifications.length,
+    10,
+    "one per interpreted event: init, 8 completed tool calls, 1 assistant message",
+  );
   assert.ok(notifications.some((n) => n.params.message.includes("editToolCall src/c.ts (not applied)")));
   assert.ok(notifications.every((n) => n.method === "notifications/progress" && n.params.progressToken === "tok-1"));
   assert.ok(notifications.some((n) => n.params.message.includes("editToolCall src/a.ts")));
-  assert.deepEqual(notifications.map((n) => n.params.progress), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], "one counter, one step per event");
+  assert.deepEqual(
+    notifications.map((n) => n.params.progress),
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    "one counter, one step per event",
+  );
 });
 
 test("a client without a progress token gets the same report and no notification", async () => {
   let sent = 0;
-  const result = await handleCursorReply({ prompt: "more", session_id: "s-1" }, { sendNotification: async () => { sent += 1; } });
+  const result = await handleCursorReply(
+    { prompt: "more", session_id: "s-1" },
+    {
+      sendNotification: async () => {
+        sent += 1;
+      },
+    },
+  );
   assert.equal(result.structuredContent.session_id, "s-1");
   assert.equal(result.structuredContent.model, "Composer 2.5");
   assert.equal(sent, 0);
@@ -94,11 +189,17 @@ test("a client without a progress token gets the same report and no notification
 test("the NDJSON parser keeps a non-JSON line as noise and parses a result without a trailing newline", () => {
   const events = [];
   const noise = [];
-  const parser = new NdjsonParser((e) => events.push(e), (l) => noise.push(l));
+  const parser = new NdjsonParser(
+    (e) => events.push(e),
+    (l) => noise.push(l),
+  );
   parser.feed('{"type":"system","subtype":"init","model":"m"}\nnot json\n{"type":"result","subtype":"success"');
   parser.feed(',"is_error":false}');
   parser.end();
-  assert.deepEqual(events.map((e) => e.type), ["system", "result"]);
+  assert.deepEqual(
+    events.map((e) => e.type),
+    ["system", "result"],
+  );
   assert.deepEqual(noise, ["not json"]);
 });
 
@@ -126,7 +227,12 @@ test("a multi-byte character split across stdout chunks is decoded whole", async
 test("no result event: the last assistant message is the answer, the status says so, the run is an error, the init session is kept", async () => {
   await writeFake([
     { type: "system", subtype: "init", model: "m", session_id: "s-4" },
-    { type: "tool_call", subtype: "completed", call_id: "c1", tool_call: { readToolCall: { args: { path: "secret.txt" }, result: { success: { content: "TOP SECRET" } } } } },
+    {
+      type: "tool_call",
+      subtype: "completed",
+      call_id: "c1",
+      tool_call: { readToolCall: { args: { path: "secret.txt" }, result: { success: { content: "TOP SECRET" } } } },
+    },
     { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Half done" }] } },
   ]);
   const result = await handleCursorAgent({ prompt: "x" });
@@ -180,7 +286,18 @@ test("a run that exits non-zero but printed a result event reports that result, 
 });
 
 test("a result event whose optional fields are null is still the result", async () => {
-  await writeFake([{ type: "result", subtype: null, is_error: null, duration_ms: null, duration_api_ms: null, result: "ok", session_id: "s-7", request_id: null }]);
+  await writeFake([
+    {
+      type: "result",
+      subtype: null,
+      is_error: null,
+      duration_ms: null,
+      duration_api_ms: null,
+      result: "ok",
+      session_id: "s-7",
+      request_id: null,
+    },
+  ]);
   const result = await handleCursorAgent({ prompt: "x" });
   assert.equal(result.structuredContent.result, "ok");
   assert.equal(result.structuredContent.status, "unknown");

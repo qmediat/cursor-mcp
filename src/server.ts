@@ -31,54 +31,94 @@ export function createServer(): McpServer {
     version,
   });
 
-  server.registerTool("cursor_agent", {
-    description:
-      "Execute a prompt using Cursor's AI agent with any model id the installed cursor-agent accepts (Composer, Claude, GPT, Gemini, Grok families on your plan; run cursor_models for ids). " +
-      "Modes: 'agent' (tools, terminal, search), 'plan' (design-focused), 'ask' (read-only). " +
-      "In headless mode cursor-agent only PROPOSES file changes unless the server operator set CURSOR_ALLOW_YOLO=true (then --force applies them; CURSOR_SANDBOX=enabled confines them). " +
-      "The result lists the files changed and the model used; a client that sends a progress token gets a progress notification per tool call.",
-    inputSchema: cursorAgentInputSchema,
-    outputSchema: runReportSchema,
-  }, async (args, extra) => {
-    try { return await handleCursorAgent(args, toolExtra(extra)); } catch (error) { return errorResponse(error); }
-  });
+  server.registerTool(
+    "cursor_agent",
+    {
+      description:
+        "Execute a prompt using Cursor's AI agent with any model id the installed cursor-agent accepts (Composer, Claude, GPT, Gemini, Grok families on your plan; run cursor_models for ids). " +
+        "Modes: 'agent' (tools, terminal, search), 'plan' (design-focused), 'ask' (read-only). " +
+        "In headless mode cursor-agent only PROPOSES file changes unless the server operator set CURSOR_ALLOW_YOLO=true (then --force applies them; CURSOR_SANDBOX=enabled confines them). " +
+        "The result lists the files changed and the model used; a client that sends a progress token gets a progress notification per tool call.",
+      inputSchema: cursorAgentInputSchema,
+      outputSchema: runReportSchema,
+    },
+    async (args, extra) => {
+      try {
+        return await handleCursorAgent(args, toolExtra(extra));
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+  );
 
-  server.registerTool("cursor_reply", {
-    description:
-      "Continue an existing Cursor agent session. Send a follow-up message in the same conversation context. " +
-      "Requires a session_id from a previous cursor_agent call.",
-    inputSchema: cursorReplyInputSchema,
-    outputSchema: runReportSchema,
-  }, async (args, extra) => {
-    try { return await handleCursorReply(args, toolExtra(extra)); } catch (error) { return errorResponse(error); }
-  });
+  server.registerTool(
+    "cursor_reply",
+    {
+      description:
+        "Continue an existing Cursor agent session. Send a follow-up message in the same conversation context. " +
+        "Requires a session_id from a previous cursor_agent call.",
+      inputSchema: cursorReplyInputSchema,
+      outputSchema: runReportSchema,
+    },
+    async (args, extra) => {
+      try {
+        return await handleCursorReply(args, toolExtra(extra));
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+  );
 
-  server.registerTool("cursor_models", {
-    description:
-      "List the model ids the installed cursor-agent offers (its `models` command), or a known list when it offers none. " +
-      "Pricing is on cursor.com/docs/models-and-pricing. Use an id with cursor_agent's 'model' parameter.",
-    inputSchema: cursorModelsInputSchema,
-  }, async (_args, extra) => {
-    try { return await handleCursorModels(extra.signal); } catch (error) { return errorResponse(error); }
-  });
+  server.registerTool(
+    "cursor_models",
+    {
+      description:
+        "List the model ids the installed cursor-agent offers (its `models` command), or a known list when it offers none. " +
+        "Pricing is on cursor.com/docs/models-and-pricing. Use an id with cursor_agent's 'model' parameter.",
+      inputSchema: cursorModelsInputSchema,
+    },
+    async (_args, extra) => {
+      try {
+        return await handleCursorModels(extra.signal);
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+  );
 
-  server.registerTool("cursor_sessions", {
-    description:
-      "List Cursor agent sessions created during this MCP server instance. " +
-      "Shows session IDs, models, and prompts. Use session IDs with cursor_reply to continue a conversation.",
-    inputSchema: cursorSessionsInputSchema,
-  }, async () => {
-    try { return await handleCursorSessions(); } catch (error) { return errorResponse(error); }
-  });
+  server.registerTool(
+    "cursor_sessions",
+    {
+      description:
+        "List Cursor agent sessions created during this MCP server instance. " +
+        "Shows session IDs, models, and prompts. Use session IDs with cursor_reply to continue a conversation.",
+      inputSchema: cursorSessionsInputSchema,
+    },
+    async () => {
+      try {
+        return await handleCursorSessions();
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+  );
 
-  server.registerTool("cursor_health", {
-    description:
-      "Check Cursor CLI installation, authentication, and server configuration. " +
-      "Run this first to verify everything is set up correctly.",
-    inputSchema: cursorHealthInputSchema,
-  }, async (_args, extra) => {
-    try { return await handleCursorHealth(extra.signal); } catch (error) { return errorResponse(error); }
-  });
+  server.registerTool(
+    "cursor_health",
+    {
+      description:
+        "Check Cursor CLI installation, authentication, and server configuration. " +
+        "Run this first to verify everything is set up correctly.",
+      inputSchema: cursorHealthInputSchema,
+    },
+    async (_args, extra) => {
+      try {
+        return await handleCursorHealth(extra.signal);
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+  );
 
   return server;
 }

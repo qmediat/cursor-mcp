@@ -47,7 +47,9 @@ export async function handleCursorModels(signal?: AbortSignal): Promise<CallTool
     failure = error instanceof Error ? error.message : String(error);
   }
 
-  const text = dynamicOutput || (failure ? `${FALLBACK_TEXT}\n\nThe CLI's models command failed: ${failure} — run cursor_health.` : FALLBACK_TEXT);
+  const text =
+    dynamicOutput ||
+    (failure ? `${FALLBACK_TEXT}\n\nThe CLI's models command failed: ${failure} — run cursor_health.` : FALLBACK_TEXT);
   return {
     content: [{ type: "text" as const, text }],
   };

@@ -24,11 +24,7 @@ function truncate(text: string, max: number): string {
 class SessionStore {
   private readonly sessions = new Map<string, SessionEntry>();
 
-  record(
-    id: string,
-    prompt: string,
-    meta: { model?: string; mode?: string } = {},
-  ): void {
+  record(id: string, prompt: string, meta: { model?: string; mode?: string } = {}): void {
     const existing = this.sessions.get(id);
     if (existing) {
       existing.lastUsedAt = new Date();
@@ -49,9 +45,7 @@ class SessionStore {
   }
 
   list(): SessionEntry[] {
-    return Array.from(this.sessions.values()).sort(
-      (a, b) => b.lastUsedAt.getTime() - a.lastUsedAt.getTime(),
-    );
+    return Array.from(this.sessions.values()).sort((a, b) => b.lastUsedAt.getTime() - a.lastUsedAt.getTime());
   }
 
   private evict(): void {

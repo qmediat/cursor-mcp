@@ -13,7 +13,14 @@ test("any model id cursor-agent could accept passes the schema and reaches --mod
     assert.equal(cursorAgentInputSchema.safeParse({ prompt: "x", model: id }).success, true, id);
     assert.deepEqual(buildCursorAgentArgs({ prompt: "x", model: id }, {}).slice(-4), ["--model", id, "--", "x"]);
   }
-  assert.deepEqual(buildCursorAgentArgs({ prompt: "x", model: "auto" }, {}), ["-p", "--output-format", "stream-json", "--trust", "--", "x"]);
+  assert.deepEqual(buildCursorAgentArgs({ prompt: "x", model: "auto" }, {}), [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--trust",
+    "--",
+    "x",
+  ]);
   for (const bad of ["", " ", "a b", "-x", "../etc"]) {
     assert.equal(cursorAgentInputSchema.safeParse({ prompt: "x", model: bad }).success, false, JSON.stringify(bad));
   }
@@ -30,10 +37,28 @@ test("--force is added only when the operator set CURSOR_ALLOW_YOLO=true, for cu
 
 test("cursor_reply resumes the session and keeps --trust, mode flags and the prompt last", () => {
   assert.deepEqual(buildCursorReplyArgs({ prompt: "y", session_id: "s1", model: "composer-2.5" }, {}), [
-    "-p", "--output-format", "stream-json", "--trust", "--resume", "s1", "--model", "composer-2.5", "--", "y",
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--trust",
+    "--resume",
+    "s1",
+    "--model",
+    "composer-2.5",
+    "--",
+    "y",
   ]);
   assert.deepEqual(buildCursorAgentArgs({ prompt: "x", mode: "plan", workspace: "/w" }, {}), [
-    "-p", "--output-format", "stream-json", "--trust", "--mode", "plan", "--workspace", "/w", "--", "x",
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--trust",
+    "--mode",
+    "plan",
+    "--workspace",
+    "/w",
+    "--",
+    "x",
   ]);
 });
 
@@ -46,7 +71,10 @@ test("CURSOR_MAX_CONCURRENCY: a positive integer, else the default 3 (never a se
 });
 
 test("cursor_models: ANSI codes stripped, 'No models available' is an empty list, real output kept", () => {
-  assert.equal(cleanModelsOutput("\u001b[2K\u001b[1mLoading models…\u001b[0m\nNo models available for this account.\n"), "");
+  assert.equal(
+    cleanModelsOutput("\u001b[2K\u001b[1mLoading models…\u001b[0m\nNo models available for this account.\n"),
+    "",
+  );
   assert.equal(cleanModelsOutput(""), "");
   assert.equal(cleanModelsOutput("\u001b[32mcomposer-2.5\u001b[0m\ngpt-5.6-sol\n"), "composer-2.5\ngpt-5.6-sol");
 });
@@ -61,15 +89,28 @@ test("no argument injection: the prompt follows `--`, and a session id that look
   assert.deepEqual(reply.slice(-2), ["--", "-f"]);
   assert.ok(!reply.slice(0, -1).includes("-f"));
   for (const bad of ["-f", "--force", "", " ", "a b", "x;y"]) {
-    assert.equal(cursorReplyInputSchema.safeParse({ prompt: "x", session_id: bad }).success, false, JSON.stringify(bad));
+    assert.equal(
+      cursorReplyInputSchema.safeParse({ prompt: "x", session_id: bad }).success,
+      false,
+      JSON.stringify(bad),
+    );
   }
-  assert.equal(cursorReplyInputSchema.safeParse({ prompt: "x", session_id: "0f3e2a1b-aaaa-4bbb-8ccc-123456789abc" }).success, true);
+  assert.equal(
+    cursorReplyInputSchema.safeParse({ prompt: "x", session_id: "0f3e2a1b-aaaa-4bbb-8ccc-123456789abc" }).success,
+    true,
+  );
 });
 
 test("cursor_models drops the CLI's 'Loading models…' status line and keeps the list", () => {
-  const real = "\u001b[2K\u001b[GLoading models…\n\u001b[2K\u001b[1A\u001b[2K\u001b[Gauto - Auto\ncomposer-2.5 - Composer 2.5\n";
+  const real =
+    "\u001b[2K\u001b[GLoading models…\n\u001b[2K\u001b[1A\u001b[2K\u001b[Gauto - Auto\ncomposer-2.5 - Composer 2.5\n";
   assert.equal(cleanModelsOutput(real), "auto - Auto\ncomposer-2.5 - Composer 2.5");
-  assert.equal(cleanModelsOutput("\u001b[2K\u001b[GLoading models…\n\u001b[2K\u001b[1A\u001b[2K\u001b[GNo models available for this account.\n"), "");
+  assert.equal(
+    cleanModelsOutput(
+      "\u001b[2K\u001b[GLoading models…\n\u001b[2K\u001b[1A\u001b[2K\u001b[GNo models available for this account.\n",
+    ),
+    "",
+  );
 });
 
 test("a workspace that reads as an option is rejected by the schema", () => {
@@ -79,7 +120,10 @@ test("a workspace that reads as an option is rejected by the schema", () => {
 
 test("a model list that mentions 'no models available' in a line is kept; only that answer alone is empty", () => {
   assert.equal(cleanModelsOutput("No models available for this account"), "");
-  assert.equal(cleanModelsOutput("auto\ncomposer-2.5 (no models available on free plans)"), "auto\ncomposer-2.5 (no models available on free plans)");
+  assert.equal(
+    cleanModelsOutput("auto\ncomposer-2.5 (no models available on free plans)"),
+    "auto\ncomposer-2.5 (no models available on free plans)",
+  );
 });
 
 test("CURSOR_KILL_GRACE_MS above what a timer can wait, and CURSOR_MAX_CONCURRENCY above 64, are the defaults", () => {
@@ -94,9 +138,21 @@ test("CURSOR_SANDBOX: enabled or disabled becomes --sandbox, unset adds nothing,
   assert.deepEqual(sandboxArgs({}), []);
   assert.deepEqual(sandboxArgs({ CURSOR_SANDBOX: "enabled" }), ["--sandbox", "enabled"]);
   assert.deepEqual(buildCursorAgentArgs({ prompt: "x" }, { CURSOR_SANDBOX: "disabled", CURSOR_ALLOW_YOLO: "true" }), [
-    "-p", "--output-format", "stream-json", "--trust", "--sandbox", "disabled", "--force", "--", "x",
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--trust",
+    "--sandbox",
+    "disabled",
+    "--force",
+    "--",
+    "x",
   ]);
   assert.throws(() => sandboxArgs({ CURSOR_SANDBOX: "yes" }), /CURSOR_SANDBOX must be/);
-  assert.equal(cursorAgentInputSchema.safeParse({ prompt: "x", cloud: true }).success, true, "an unknown key is ignored by the schema, not an option any more");
+  assert.equal(
+    cursorAgentInputSchema.safeParse({ prompt: "x", cloud: true }).success,
+    true,
+    "an unknown key is ignored by the schema, not an option any more",
+  );
   assert.equal(buildCursorAgentArgs({ prompt: "x", cloud: true }, {}).includes("-c"), false);
 });

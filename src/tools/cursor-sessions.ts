@@ -19,10 +19,12 @@ export async function handleCursorSessions(): Promise<CallToolResult> {
 
   if (sessions.length === 0) {
     return {
-      content: [{
-        type: "text" as const,
-        text: "No sessions yet. Use cursor_agent to start a new session.",
-      }],
+      content: [
+        {
+          type: "text" as const,
+          text: "No sessions yet. Use cursor_agent to start a new session.",
+        },
+      ],
     };
   }
 
@@ -33,9 +35,11 @@ export async function handleCursorSessions(): Promise<CallToolResult> {
   });
 
   return {
-    content: [{
-      type: "text" as const,
-      text: `Sessions (this server instance):\n\n${lines.join("\n\n")}\n\nUse cursor_reply with a session_id to continue a conversation.`,
-    }],
+    content: [
+      {
+        type: "text" as const,
+        text: `Sessions (this server instance):\n\n${lines.join("\n\n")}\n\nUse cursor_reply with a session_id to continue a conversation.`,
+      },
+    ],
   };
 }

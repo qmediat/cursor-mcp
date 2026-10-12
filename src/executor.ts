@@ -2,7 +2,15 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { NdjsonParser, ResultEvent, type StreamEvent } from "./stream.js";
 import { which } from "./utils.js";
 import { CursorCliError, CursorTimeoutError, CursorNotFoundError, CursorAbortError } from "./errors.js";
-import { CursorResultSchema, DEFAULT_TIMEOUT_MS, CURSOR_BINARY, DEFAULT_KILL_GRACE_MS, DEFAULT_MAX_CONCURRENCY, MAX_TIMER_MS, MAX_CONCURRENCY_LIMIT } from "./types.js";
+import {
+  CursorResultSchema,
+  DEFAULT_TIMEOUT_MS,
+  CURSOR_BINARY,
+  DEFAULT_KILL_GRACE_MS,
+  DEFAULT_MAX_CONCURRENCY,
+  MAX_TIMER_MS,
+  MAX_CONCURRENCY_LIMIT,
+} from "./types.js";
 import type { CursorResult } from "./types.js";
 
 let binaryPath: string | null = null;
@@ -198,9 +206,7 @@ async function executeInternal(options: ExecuteOptions): Promise<ExecuteResult> 
 
   // Combine MCP cancellation signal with hard timeout using AbortSignal.any() (Node 20+)
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  const combinedSignal = signal
-    ? AbortSignal.any([signal, timeoutSignal])
-    : timeoutSignal;
+  const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 
   return new Promise<ExecuteResult>((resolve, reject) => {
     let settled = false;

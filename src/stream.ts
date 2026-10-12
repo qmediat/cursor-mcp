@@ -20,7 +20,9 @@ export const AssistantEvent = z
   .object({
     type: z.literal("assistant"),
     message: z
-      .object({ content: z.array(z.object({ type: z.string(), text: z.string().optional() }).passthrough()).optional() })
+      .object({
+        content: z.array(z.object({ type: z.string(), text: z.string().optional() }).passthrough()).optional(),
+      })
       .passthrough()
       .optional(),
     session_id: z.string().optional(),

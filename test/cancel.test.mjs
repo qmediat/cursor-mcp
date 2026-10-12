@@ -79,7 +79,8 @@ const withFake = async (flags, body) => {
 };
 const helperPidOf = async () => Number(await readFile(`${pidFile}.helper`, "utf8"));
 // what the FAKE_TERM_MARK agent noted: "TERM" once it saw SIGTERM, "none" when it saw none (no mark); any other read failure throws
-const termMark = () => readFile(`${pidFile}.term`, "utf8").catch((e) => (e.code === "ENOENT" ? "none" : Promise.reject(e)));
+const termMark = () =>
+  readFile(`${pidFile}.term`, "utf8").catch((e) => (e.code === "ENOENT" ? "none" : Promise.reject(e)));
 // a call aborted while its helper ignores SIGTERM: the helper outlives SIGTERM, SIGKILL reaches it at the deadline
 const assertHelperKilledAtDeadline = async (survived) => {
   const ac = new AbortController();
@@ -109,7 +110,10 @@ const spawnServer = ({ call = {}, flags = [], graceMs, abortAfterMs, exitAfterMs
   ];
   const env = { ...process.env, ...Object.fromEntries(flags.map((flag) => [flag, "1"])) };
   if (graceMs !== undefined) env.CURSOR_KILL_GRACE_MS = String(graceMs);
-  return spawn(process.execPath, ["--input-type=module", "-e", lines.join("\n")], { stdio: ["ignore", "ignore", "inherit"], env });
+  return spawn(process.execPath, ["--input-type=module", "-e", lines.join("\n")], {
+    stdio: ["ignore", "ignore", "inherit"],
+    env,
+  });
 };
 
 test("a cancelled request kills a child that ignores SIGTERM (SIGKILL after the grace period) and frees the slot only then", async () => {
@@ -122,7 +126,10 @@ test("a cancelled request kills a child that ignores SIGTERM (SIGKILL after the 
   ac.abort();
   await assert.rejects(first, CursorAbortError);
   const settledAfter = Date.now() - aborted;
-  assert.ok(settledAfter >= GRACE_MS - 50, `the call settles only once the child is gone (${settledAfter} ms after abort)`);
+  assert.ok(
+    settledAfter >= GRACE_MS - 50,
+    `the call settles only once the child is gone (${settledAfter} ms after abort)`,
+  );
   assert.ok(!alive(pid), "the child is gone after SIGKILL");
   // the slot was held while the child lived: a second call with concurrency 1 starts only now
   const ac2 = new AbortController();
@@ -242,7 +249,11 @@ test("an exit the server cannot delay SIGKILLs every group: an agent that would 
 
 test("the server's shutdown reaches a helper whose leader already exited (the group outlives its leader)", async () => {
   await fresh();
-  const server = spawnServer({ call: { parseJson: false }, flags: ["FAKE_GRANDCHILD", "FAKE_STUBBORN_HELPER", "FAKE_EXITS_AT_ONCE"], graceMs: 2000 });
+  const server = spawnServer({
+    call: { parseJson: false },
+    flags: ["FAKE_GRANDCHILD", "FAKE_STUBBORN_HELPER", "FAKE_EXITS_AT_ONCE"],
+    graceMs: 2000,
+  });
   const pid = await childPid();
   const helperPid = await helperPidOf();
   await sleep(300); // the leader has exited, the helper's node is up and ignores SIGTERM

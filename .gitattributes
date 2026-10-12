@@ -1,1 +1,3 @@
+# every text file LF in the work tree too: Prettier (endOfLine lf) and the hashes of the vendored presets need it
+* text=auto eol=lf
 eslint-suppressions.json linguist-generated=true
