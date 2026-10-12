@@ -16,8 +16,9 @@
 //   Any other argument (`--fix` through `npm run lint --`, `--duplicates=<report>`) is a usage error, exit 2.
 // Every check (not --counts, not --write-duplicates) also holds the vendored preset files under lint/ of the directory
 // it runs in to lint/presets.sha256, the presets' own list copied beside them: a file edited here is refused.
-// Exit: 0 clean, 1 a baseline grew or does not hold, 2 cannot tell (no base ref, an unreadable file or report, an entry
-// or a new baseline a base copy read in part could hold) — 1 whenever anything definitely grew.
+// Exit: 0 clean, 1 a baseline grew or does not hold, 2 cannot tell (no base ref, an unreadable file or report — a head
+// baseline's line or value included —, an entry or a new baseline a base copy read in part could hold) — 1 whenever
+// anything definitely grew.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
@@ -105,7 +106,7 @@ export function eslintEntries(text, skipped = null) {
       continue;
     }
     for (const [rule, value] of Object.entries(rules)) {
-      const read = readValue(() => countOf(value?.count, file), skipped);
+      const read = readValue(() => countOf(value?.["count"], file), skipped);
       if (read !== null) entries.set(keyOf(file, rule), read);
     }
   }
@@ -280,7 +281,7 @@ export function listEntries(text) {
 export function duplicateEntries(text, skipped = null) {
   const record = JSON.parse(text);
   if (!isMap(record)) throw new Error("not a jscpd baseline record");
-  const files = record.files;
+  const files = record["files"];
   if (!isMap(files)) {
     throw new Error("files is not a map of duplicated lines per file");
   }
@@ -290,7 +291,7 @@ export function duplicateEntries(text, skipped = null) {
     const read = readValue(() => countOf(lines, file), skipped);
     if (read !== null) entries.set(keyOf(file, ""), read);
   }
-  const total = record.duplicatedLines;
+  const total = record["duplicatedLines"];
   // a base copy's total is not read: it loses no entry, and a copy is read in part only when one is left out
   if (skipped === null && total !== sum(entries)) throw new Error(`duplicatedLines ${total} is not the sum of its files (${sum(entries)})`);
   return entries;
@@ -425,7 +426,7 @@ function copyAt(kind, path, history) {
     else entries.set(key, count);
   }
   skipped.push(...whole.map((reason) => `the whole copy (${reason})`));
-  history.skipped.push(...skipped.map((reason) => `${path} at its merge base with ${history.name}: ${firstLines([reason])}`));
+  history.skipped.push(...skipped.map((reason) => `${path} at its merge base with ${history.name}: ${firstLine(reason)}`));
   return { from: path, root: rootOf(path, kind.name), entries, partial: skipped.length > 0 };
 }
 
@@ -492,12 +493,12 @@ function stillHeld(kind, copy, history) {
   /** @type {string[]} */
   const said = [];
   const held = readValue(() => new Set(keys(kind.entries(readFileSync(here, "utf8")))), said);
-  if (held === null) history.skipped.push(`${now} at head: ${firstLines(said)} — it lends no count to another baseline`);
+  if (held === null) history.skipped.push(`${now} at head: ${said.map(firstLine).join("; ")} — it lends no count to another baseline`);
   return held;
 }
 
-/** @param {string[]} reasons @returns {string} each reason's first line (a parser may quote its input), joined */
-const firstLines = (reasons) => reasons.map((reason) => reason.split("\n")[0]).join("; ");
+/** @param {string} reason @returns {string} its first line (a parser may quote its input) */
+const firstLine = (reason) => reason.split("\n")[0] ?? "";
 
 /** @param {Copy} copy @param {History} history @returns {string | undefined} where it is at head: kept, or moved by git */
 const headPath = (copy, history) => (history.kept.has(copy.from) ? copy.from : history.moved.get(copy.from));
@@ -538,19 +539,22 @@ function recordedFiles(copies, history) {
  * or to the largest of the removed ones'.
  * @param {string} key
  * @param {Scope} scope
- * @returns {number | undefined}
+ * @returns {{ was: number | undefined, lent: string | null }} the count, and the index key when the index lent it
  */
 function baseEntry(key, scope) {
   const { own, root, index, history } = scope;
   const [file, label] = partsOf(key);
   if (file === "") {
     const held = settingsCopies(scope).flatMap((copy) => copy.entries.get(key) ?? []);
-    return held.length > 0 ? Math.max(...held) : undefined;
+    return { was: held.length > 0 ? Math.max(...held) : undefined, lent: null };
   }
   const path = posix.join(root, file);
   const inOwn = (/** @type {string} */ name) => own?.entries.get(keyOf(posix.relative(own.root || ".", name), label));
   const owned = inOwn(history.origins.get(path) ?? path) ?? inOwn(path);
-  return owned !== undefined || own?.partial ? owned : index().lend.get(keyOf(path, label)); // read in part: maybe its own
+  if (owned !== undefined || own?.partial) return { was: owned, lent: null }; // read in part: maybe its own
+  const lent = keyOf(path, label);
+  const count = index().lend.get(lent);
+  return { was: count, lent: count === undefined ? null : lent };
 }
 
 /**
@@ -640,8 +644,10 @@ function scopeOf(kind, top, head, base) {
 }
 
 /**
- * @typedef {{ problems: string[], adoption: string | null, unknowns: string[] }} Comparison one baseline's verdict: its
- *   growth, the adoption said, and the entries that cannot be told (a copy read in part may hold them)
+ * @typedef {{ problems: string[], adoption: string | null, unknowns: string[], claims: Claim[] }} Comparison one
+ *   baseline's verdict: its growth, the adoption said, the entries that cannot be told (a copy read in part may hold
+ *   them), and the entries that answered to a count the index lent
+ * @typedef {{ key: string, path: string, count: number }} Claim a head entry that took a lent count (key from the top)
  */
 
 /**
@@ -670,9 +676,10 @@ function compare(kind, path, base) {
   if (scope === null) return newBaseline(kind, path, top, head, base);
   const held = heldNote(scope, top);
   /** @type {Comparison} */
-  const verdict = { problems: [], adoption: null, unknowns: [] };
+  const verdict = { problems: [], adoption: null, unknowns: [], claims: [] };
   for (const [key, count] of head) {
-    const was = baseEntry(key, scope);
+    const { was, lent } = baseEntry(key, scope);
+    if (lent !== null) verdict.claims.push({ key: lent, path, count });
     if (count <= (was ?? 0)) continue; // no rise (an enabled cop weighs 0)
     const doubt = was === undefined ? doubtOf(key, count, scope, base) : null;
     const shown = `${kind.show(...partsOf(key))} (${count})`;
@@ -698,10 +705,10 @@ function newBaseline(kind, path, top, head, base) {
   const unread = files.flatMap((file) => unreadFor(base, posix.join(root, file)));
   if (unread.length > 0) {
     const unknown = `${path} is new, and ${namesOf(unread)} at the base was read in part (said above): its files may be recorded there — make that copy readable first`;
-    return { problems: [], adoption: null, unknowns: [unknown] };
+    return { problems: [], adoption: null, unknowns: [unknown], claims: [] };
   }
   const adoption = `${path} is new since ${base.history.name} (an adoption, ${kind.measure(head)}): review its entries`;
-  return { problems: [], adoption, unknowns: [] };
+  return { problems: [], adoption, unknowns: [], claims: [] };
 }
 
 /**
@@ -713,7 +720,7 @@ function newBaseline(kind, path, top, head, base) {
 function toldOrNot(tell, path) {
   /** @type {string[]} */
   const unknowns = [];
-  return toldAt(path, tell, unknowns) ?? { problems: [], adoption: null, unknowns };
+  return toldAt(path, tell, unknowns) ?? { problems: [], adoption: null, unknowns, claims: [] };
 }
 
 /**
@@ -728,8 +735,31 @@ function toldAt(where, tell, unknowns) {
   /** @type {string[]} */
   const said = [];
   const told = readValue(tell, said);
-  unknowns.push(...said.map((reason) => `${where}: ${firstLines([reason])}`));
+  unknowns.push(...said.map((reason) => `${where}: ${firstLine(reason)}`));
   return told;
+}
+
+/**
+ * A count the index lent is claimed by every head baseline that answered to it: two or more may split it (7 → 3 + 4)
+ * but never exceed it together (7 → 7 + 7) — said once, naming every claimant (a claimant that alone exceeds it is
+ * said by its own comparison as well: one run says both).
+ * @param {Claim[]} claims
+ * @param {Map<string, number>} lend
+ * @param {Kind["show"]} show
+ * @returns {string[]}
+ */
+function overLent(claims, lend, show) {
+  /** @type {Map<string, Claim[]>} */
+  const byKey = new Map();
+  for (const claim of claims) byKey.set(claim.key, [...(byKey.get(claim.key) ?? []), claim]);
+  return [...byKey].flatMap(([key, group]) => {
+    const count = lend.get(key) ?? 0;
+    const total = group.reduce((all, claim) => all + claim.count, 0);
+    const paths = [...new Set(group.map((claim) => claim.path))];
+    if (paths.length < 2 || total <= count) return [];
+    const shown = show(...partsOf(key));
+    return [`${paths.join(", ")}: grew: ${shown} (${total} across them; ${count} lent at the base) — fix the code; a baseline only shrinks`];
+  });
 }
 
 /**
@@ -755,7 +785,10 @@ function growth(history, tracked) {
       recorded: () => (recorded ??= recordedFiles(all(), history)),
       copies: all,
     };
-    return named(tracked, kind.name).map((path) => toldOrNot(() => compare(kind, path, base), path));
+    const told = named(tracked, kind.name).map((path) => toldOrNot(() => compare(kind, path, base), path));
+    const claims = told.flatMap((comparison) => comparison.claims);
+    const shared = claims.length === 0 ? [] : overLent(claims, base.index().lend, kind.show);
+    return [...told, { problems: shared, adoption: null, unknowns: [], claims: [] }];
   });
   return {
     problems: [...movedAway(history.moved), ...results.flatMap(({ problems }) => problems)],
@@ -773,13 +806,13 @@ function growth(history, tracked) {
  */
 export function measuredDuplicates(reportPath) {
   const report = JSON.parse(readFileSync(reportPath, "utf8"));
-  if (!report?.statistics?.total?.sources) {
+  if (!report?.["statistics"]?.["total"]?.["sources"]) {
     throw new Error(`${reportPath}: jscpd analyzed no files — check its paths and ignore patterns`);
   }
-  if (!Array.isArray(report.duplicates)) throw new Error(`${reportPath}: no duplicates list — not a jscpd JSON report`);
+  if (!Array.isArray(report["duplicates"])) throw new Error(`${reportPath}: no duplicates list — not a jscpd JSON report`);
   /** @type {Map<string, Set<number>>} */
   const covered = new Map();
-  for (const clone of report.duplicates) [clone?.firstFile, clone?.secondFile].forEach((side) => cover(covered, side));
+  for (const clone of report["duplicates"]) [clone?.["firstFile"], clone?.["secondFile"]].forEach((side) => cover(covered, side));
   return new Map([...covered].sort(([a], [b]) => a.localeCompare(b)).map(([file, lines]) => [file, lines.size]));
 }
 
@@ -788,10 +821,12 @@ export function measuredDuplicates(reportPath) {
  * @param {unknown} side one file of a clone ({ name, start, end }), as the report holds it
  */
 function cover(covered, side) {
-  if (!isMap(side) || typeof side.name !== "string") throw new Error("a clone without its two files — not a jscpd JSON report");
-  const file = isAbsolute(side.name) ? relative(process.cwd(), side.name) : side.name;
+  const fields = isMap(side) ? side : {};
+  const name = fields["name"];
+  if (typeof name !== "string") throw new Error("a clone without its two files — not a jscpd JSON report");
+  const file = isAbsolute(name) ? relative(process.cwd(), name) : name;
   const lines = covered.get(file) ?? new Set();
-  const [start, end] = [countOf(side.start, `${file}: start`), countOf(side.end, `${file}: end`)];
+  const [start, end] = [countOf(fields["start"], `${file}: start`), countOf(fields["end"], `${file}: end`)];
   for (let line = start; line <= end; line += 1) lines.add(line);
   covered.set(file, lines);
 }
@@ -892,8 +927,8 @@ function pushedFrom() {
   if (process.env["GITHUB_EVENT_NAME"] !== "push" || !file) return null;
   const event = JSON.parse(readFileSync(file, "utf8"));
   if (!isMap(event)) throw new Error(`${file}: the push event is no JSON object`);
-  const before = String(event.before ?? "");
-  if (event.deleted === true) return null; // a deleted branch: nothing was pushed to compare
+  const before = String(event["before"] ?? "");
+  if (event["deleted"] === true) return null; // a deleted branch: nothing was pushed to compare
   return /^[0-9a-f]{40}$/.test(before) && !/^0+$/.test(before) ? before : null;
 }
 
@@ -910,6 +945,9 @@ export function parseArgs(argv) {
   if (unknown.length > 0) throw new Error(`unknown argument ${unknown.join(" ")} — ${usage}`);
   const twice = [...ARGS].filter((flag) => argv.filter((arg) => arg === flag).length > 1);
   if (twice.length > 0) throw new Error(`${twice.join(" ")} given twice — ${usage}`);
+  const modes = ["--write-duplicates", "--counts"].filter((flag) => argv.includes(flag));
+  const checks = ["--base", "--duplicates"].filter((flag) => argv.includes(flag));
+  if (modes.length + (checks.length > 0 ? 1 : 0) > 1) throw new Error(`${[...modes, ...checks].join(" ")} together — ${usage}`);
   const value = (/** @type {string} */ flag) => {
     if (!argv.includes(flag)) return null;
     const given = argv[argv.indexOf(flag) + 1];
