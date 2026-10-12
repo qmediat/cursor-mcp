@@ -3,7 +3,15 @@
 import type { CallToolResult, ServerNotification } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod/v4";
 import type { StreamEvent } from "./stream.js";
-import { AssistantEvent, NOISE_SAMPLE, type NoiseEvent, SystemInitEvent, ToolCallEvent, type ToolCallSummary, summarizeToolCall } from "./stream.js";
+import {
+  AssistantEvent,
+  NOISE_SAMPLE,
+  type NoiseEvent,
+  SystemInitEvent,
+  ToolCallEvent,
+  type ToolCallSummary,
+  summarizeToolCall,
+} from "./stream.js";
 
 const isNoise = (event: StreamEvent): event is NoiseEvent => event.type === "noise";
 import type { CursorResult } from "./types.js";
@@ -11,8 +19,14 @@ import { formatDuration } from "./utils.js";
 
 /** The structured result of cursor_agent and cursor_reply (`outputSchema`). */
 export const runReportSchema = z.object({
-  result: z.string().describe("The agent's final answer; without a result event, its last message, else empty (what stdout held is in noise_sample, never here)"),
-  status: z.string().describe("cursor-agent's result subtype: success, error, …; no-result-event when the run ended without one"),
+  result: z
+    .string()
+    .describe(
+      "The agent's final answer; without a result event, its last message, else empty (what stdout held is in noise_sample, never here)",
+    ),
+  status: z
+    .string()
+    .describe("cursor-agent's result subtype: success, error, …; no-result-event when the run ended without one"),
   exit_code: z.number().int().nullable().describe("cursor-agent's exit code (null when it was killed)"),
   is_error: z.boolean(),
   session_id: z.string().nullable().describe("The session to resume with cursor_reply"),
@@ -27,7 +41,9 @@ export const runReportSchema = z.object({
     ),
   files_proposed: z
     .array(z.string())
-    .describe("Paths of file-tool write/edit/delete calls that did not report success (proposed without --force, refused, failed), each once"),
+    .describe(
+      "Paths of file-tool write/edit/delete calls that did not report success (proposed without --force, refused, failed), each once",
+    ),
   noise_lines: z.number().int().describe("stdout lines that were not stream-json events (counted, never dropped)"),
   noise_sample: z.array(z.string()).describe("The first few of those lines, verbatim (500 characters each at most)"),
   stderr: z.string().nullable(),
@@ -158,7 +174,11 @@ export function toCallToolResult(report: RunReport): CallToolResult {
   if (meta.length > 0) lines.push("", "---", meta.join(" | "));
   if (report.files_changed.length > 0) lines.push("", "Files changed:", ...report.files_changed.map((f) => `  ${f}`));
   if (report.files_proposed.length > 0) {
-    lines.push("", "Files proposed, not applied (no --force, refused or failed):", ...report.files_proposed.map((f) => `  ${f}`));
+    lines.push(
+      "",
+      "Files proposed, not applied (no --force, refused or failed):",
+      ...report.files_proposed.map((f) => `  ${f}`),
+    );
   }
   if (report.stderr !== null) lines.push("", `[stderr] ${report.stderr}`);
   return {

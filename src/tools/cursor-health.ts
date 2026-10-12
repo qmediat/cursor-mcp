@@ -46,8 +46,10 @@ export async function handleCursorHealth(signal?: AbortSignal): Promise<CallTool
         parseJson: false,
         ...(signal ? { signal } : {}),
       });
-      if (result.stdout.toLowerCase().includes("not logged in") ||
-          result.stdout.toLowerCase().includes("not authenticated")) {
+      if (
+        result.stdout.toLowerCase().includes("not logged in") ||
+        result.stdout.toLowerCase().includes("not authenticated")
+      ) {
         checks.push("[FAIL] Not authenticated. Run: agent login");
         healthy = false;
       } else {
@@ -70,10 +72,12 @@ export async function handleCursorHealth(signal?: AbortSignal): Promise<CallTool
   const status = healthy ? "HEALTHY" : "UNHEALTHY";
 
   return {
-    content: [{
-      type: "text" as const,
-      text: `Cursor MCP Health Check: ${status}\n\n${checks.join("\n")}`,
-    }],
+    content: [
+      {
+        type: "text" as const,
+        text: `Cursor MCP Health Check: ${status}\n\n${checks.join("\n")}`,
+      },
+    ],
     ...(healthy ? {} : { isError: true }),
   };
 }

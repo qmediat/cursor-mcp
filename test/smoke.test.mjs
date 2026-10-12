@@ -97,7 +97,11 @@ test("the server completes the MCP handshake, advertises the package version and
     );
     const model = agent.inputSchema.properties.model;
     assert.equal(model.type, "string", "model is a free id");
-    assert.equal(Object.hasOwn(model, "enum"), false, "no closed model list: every id cursor-agent accepts passes (1.1.0)");
+    assert.equal(
+      Object.hasOwn(model, "enum"),
+      false,
+      "no closed model list: every id cursor-agent accepts passes (1.1.0)",
+    );
   } finally {
     await server.stop();
   }
