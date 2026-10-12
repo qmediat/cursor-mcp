@@ -4,7 +4,9 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import { createInterface } from "node:readline";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -14,9 +16,10 @@ const PACKAGE_VERSION = JSON.parse(readFileSync(new URL("../package.json", impor
 const REQUEST_TIMEOUT_MS = 10_000;
 const EXPECTED_TOOLS = ["cursor_agent", "cursor_reply", "cursor_models", "cursor_sessions", "cursor_health"];
 
-/** Spawns the built server; every request either resolves with its response or rejects (timeout, child exit, error). */
-function startServer() {
-  const child = spawn(process.execPath, [SERVER], { stdio: ["pipe", "pipe", "pipe"] });
+/** Spawns the built server (`env` over this process's); every request either resolves with its response or rejects
+ * (timeout, child exit, error). */
+function startServer(env = {}) {
+  const child = spawn(process.execPath, [SERVER], { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...env } });
   // Registered before anything can happen, so an early exit is never missed by stop().
   const closed = once(child, "close");
   const pending = new Map();
@@ -104,5 +107,29 @@ test("the server completes the MCP handshake, advertises the package version and
     );
   } finally {
     await server.stop();
+  }
+});
+
+test("a tool whose run fails answers with the tool's error result — the CLI's exit code and stderr — never a protocol error", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cursor-mcp-failing-agent-"));
+  writeFileSync(join(dir, "cursor-agent"), "#!/bin/sh\necho 'no such model' >&2\nexit 3\n", { mode: 0o755 });
+  const server = startServer({ PATH: `${dir}${delimiter}${process.env.PATH}` }); // the fake first; `which` itself is on PATH
+  try {
+    await server.request("initialize", {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "smoke-test", version: "0.0.0" },
+    });
+    server.notify("notifications/initialized");
+    const call = await server.request("tools/call", { name: "cursor_agent", arguments: { prompt: "x" } });
+    assert.equal(call.error, undefined, JSON.stringify(call.error));
+    assert.equal(call.result.isError, true);
+    assert.equal(
+      call.result.content[0].text,
+      "Cursor CLI error: cursor-agent exited with code 3\nExit code: 3\nstderr: no such model",
+    );
+  } finally {
+    await server.stop();
+    rmSync(dir, { recursive: true, force: true });
   }
 });

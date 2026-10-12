@@ -42,13 +42,7 @@ export function createServer(): McpServer {
       inputSchema: cursorAgentInputSchema,
       outputSchema: runReportSchema,
     },
-    async (args, extra) => {
-      try {
-        return await handleCursorAgent(args, toolExtra(extra));
-      } catch (error) {
-        return errorResponse(error);
-      }
-    },
+    guarded((args, extra) => handleCursorAgent(args, toolExtra(extra))),
   );
 
   server.registerTool(
@@ -60,13 +54,7 @@ export function createServer(): McpServer {
       inputSchema: cursorReplyInputSchema,
       outputSchema: runReportSchema,
     },
-    async (args, extra) => {
-      try {
-        return await handleCursorReply(args, toolExtra(extra));
-      } catch (error) {
-        return errorResponse(error);
-      }
-    },
+    guarded((args, extra) => handleCursorReply(args, toolExtra(extra))),
   );
 
   server.registerTool(
@@ -77,13 +65,7 @@ export function createServer(): McpServer {
         "Pricing is on cursor.com/docs/models-and-pricing. Use an id with cursor_agent's 'model' parameter.",
       inputSchema: cursorModelsInputSchema,
     },
-    async (_args, extra) => {
-      try {
-        return await handleCursorModels(extra.signal);
-      } catch (error) {
-        return errorResponse(error);
-      }
-    },
+    guarded((_args, extra) => handleCursorModels(extra.signal)),
   );
 
   server.registerTool(
@@ -94,13 +76,7 @@ export function createServer(): McpServer {
         "Shows session IDs, models, and prompts. Use session IDs with cursor_reply to continue a conversation.",
       inputSchema: cursorSessionsInputSchema,
     },
-    async () => {
-      try {
-        return await handleCursorSessions();
-      } catch (error) {
-        return errorResponse(error);
-      }
-    },
+    guarded(() => handleCursorSessions()),
   );
 
   server.registerTool(
@@ -111,16 +87,23 @@ export function createServer(): McpServer {
         "Run this first to verify everything is set up correctly.",
       inputSchema: cursorHealthInputSchema,
     },
-    async (_args, extra) => {
-      try {
-        return await handleCursorHealth(extra.signal);
-      } catch (error) {
-        return errorResponse(error);
-      }
-    },
+    guarded((_args, extra) => handleCursorHealth(extra.signal)),
   );
 
   return server;
+}
+
+/** A tool handler whose failure is the tool's error result, never a thrown protocol error: one rule for every tool. */
+function guarded<A extends unknown[]>(
+  handler: (...args: A) => Promise<CallToolResult>,
+): (...args: A) => Promise<CallToolResult> {
+  return async (...args) => {
+    try {
+      return await handler(...args);
+    } catch (error) {
+      return errorResponse(error);
+    }
+  };
 }
 
 function errorResponse(error: unknown): CallToolResult {

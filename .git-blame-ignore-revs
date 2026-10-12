@@ -1,0 +1,3 @@
+# The one-time Prettier reformat (#33): formatting only. GitHub reads this file; for a local `git blame`:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+01dfe78050faa3f936470bf41282d4f80c466d1a

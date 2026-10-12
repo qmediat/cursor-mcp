@@ -18,7 +18,7 @@ grew against the base branch (CI checks out with `fetch-depth: 0`).
 **Formatting.** Prettier (pinned in `package.json`; `.prettierrc.json`: printWidth 120, its defaults otherwise —
 double quotes, semicolons, trailing commas: the style the code had) formats every `*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}` file (the one glob: the `fmt` script); `npm run format` rewrites, `npm run format:check` is a CI step. Excluded (`.prettierignore`): the vendored
 presets of Rule 1 and whatever ESLint ignores (the same list); `.gitattributes` keeps every text file LF. Prose,
-JSON and YAML are not formatted by it.
+JSON and YAML are not formatted by it. `.git-blame-ignore-revs` names the one-time reformat (#33) for `git blame`.
 
 **The exemplars** — read before writing, not the nearest file:
 
