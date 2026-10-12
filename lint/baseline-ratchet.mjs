@@ -445,8 +445,10 @@ function ownCopy(kind, top, { history, copies }) {
 }
 
 /**
+ * @typedef {{ most: number, total: number }} Lent what the copies an entry left recorded: the largest count one copy
+ *   carried (what one head baseline may take) and their sum (what the head baselines that take it may hold together)
  * @typedef {object} BaseIndex the base entries an entry may fall back to
- * @property {Map<string, number>} lend the entries that left their copy, with the count they carry
+ * @property {Map<string, Lent>} lend the entries that left their copy, with the counts they carry
  * @property {Map<string, { at: string, count: number }>} unsure the entries of a copy whose head file (at `at`, from the
  *   top) cannot be read: it may still record them — up to the count it recorded at the base
  */
@@ -455,7 +457,7 @@ function ownCopy(kind, top, { history, copies }) {
  * The file entries that left their base copy since — the copy is gone, or no longer records them at head —, keyed from
  * the top through git's renames: what an entry falls back to when its own baseline never named its file. A file moved
  * between baselines keeps its count; a second baseline naming a file the first still records gets none. Two copies
- * naming one entry: the larger count.
+ * naming one entry: one head baseline takes the larger count, the head baselines together the sum.
  * @param {Kind} kind
  * @param {Copy[]} copies the kind's baselines at the base
  * @param {History} history
@@ -470,11 +472,14 @@ function baseIndex(kind, copies, history) {
       if (partsOf(key)[0] === "") continue;
       const where = topKey(key, copy.root, history.moved);
       if (still === null) index.unsure.set(where, { at: headPath(copy, history) ?? copy.from, count: Math.max(index.unsure.get(where)?.count ?? 0, count) });
-      else if (!still.has(where)) index.lend.set(where, Math.max(index.lend.get(where) ?? 0, count));
+      else if (!still.has(where)) index.lend.set(where, withCopy(index.lend.get(where), count));
     }
   }
   return index;
 }
+
+/** @param {Lent | undefined} lent @param {number} count one more copy's @returns {Lent} */
+const withCopy = (lent, count) => ({ most: Math.max(lent?.most ?? 0, count), total: (lent?.total ?? 0) + count });
 
 /**
  * What a base copy still records at head — where it is now, kept or moved by git —, keyed from the top: nothing when
@@ -487,7 +492,7 @@ function baseIndex(kind, copies, history) {
 function stillHeld(kind, copy, history) {
   const now = headPath(copy, history);
   if (now === undefined || !isNamed(now, kind.name)) return new Set();
-  const here = posix.relative(history.prefix.replace(/\/$/, "") || ".", now);
+  const here = posix.relative(cwdOf(history.prefix), now);
   const root = rootOf(now, kind.name);
   const keys = (/** @type {Map<string, number>} */ head) => [...head.keys()].map((key) => topKey(key, root));
   /** @type {string[]} */
@@ -497,8 +502,11 @@ function stillHeld(kind, copy, history) {
   return held;
 }
 
+/** @param {string} prefix the working directory from the top ("" or "dir/") @returns {string} it as a path ("." or "dir") */
+const cwdOf = (prefix) => prefix.replace(/\/$/, "") || ".";
+
 /** @param {string} reason @returns {string} its first line (a parser may quote its input) */
-const firstLine = (reason) => reason.split("\n")[0] ?? "";
+const firstLine = (reason) => reason.replace(/\n[\s\S]*/, "");
 
 /** @param {Copy} copy @param {History} history @returns {string | undefined} where it is at head: kept, or moved by git */
 const headPath = (copy, history) => (history.kept.has(copy.from) ? copy.from : history.moved.get(copy.from));
@@ -539,7 +547,8 @@ function recordedFiles(copies, history) {
  * or to the largest of the removed ones'.
  * @param {string} key
  * @param {Scope} scope
- * @returns {{ was: number | undefined, lent: string | null }} the count, and the index key when the index lent it
+ * @returns {{ was: number | undefined, lent: { key: string, total: number } | null }} the count, and — when the index
+ *   lent it — its key and what the copies it left recorded together
  */
 function baseEntry(key, scope) {
   const { own, root, index, history } = scope;
@@ -552,9 +561,9 @@ function baseEntry(key, scope) {
   const inOwn = (/** @type {string} */ name) => own?.entries.get(keyOf(posix.relative(own.root || ".", name), label));
   const owned = inOwn(history.origins.get(path) ?? path) ?? inOwn(path);
   if (owned !== undefined || own?.partial) return { was: owned, lent: null }; // read in part: maybe its own
-  const lent = keyOf(path, label);
-  const count = index().lend.get(lent);
-  return { was: count, lent: count === undefined ? null : lent };
+  const fromTop = keyOf(path, label);
+  const lent = index().lend.get(fromTop);
+  return lent === undefined ? { was: undefined, lent: null } : { was: lent.most, lent: { key: fromTop, total: lent.total } };
 }
 
 /**
@@ -647,8 +656,15 @@ function scopeOf(kind, top, head, base) {
  * @typedef {{ problems: string[], adoption: string | null, unknowns: string[], claims: Claim[] }} Comparison one
  *   baseline's verdict: its growth, the adoption said, the entries that cannot be told (a copy read in part may hold
  *   them), and the entries that answered to a count the index lent
- * @typedef {{ key: string, path: string, count: number }} Claim a head entry that took a lent count (key from the top)
+ * @typedef {{ key: string, path: string, count: number, total: number }} Claim a head entry that took a lent count (key
+ *   from the top), and what the copies it left recorded together
  */
+
+/** @param {Partial<Comparison>} said @returns {Comparison} a verdict with nothing else in it */
+const verdictOf = (said) => ({ problems: [], adoption: null, unknowns: [], claims: [], ...said });
+
+/** @param {string} where the baseline (or baselines) @param {string} what the entry and its count @returns {string} */
+const grew = (where, what) => `${where}: grew: ${what} — fix the code; a baseline only shrinks`;
 
 /**
  * Why a head baseline is held to what it is, for its growth messages ("" when it is held to its own base copy).
@@ -675,15 +691,14 @@ function compare(kind, path, base) {
   const scope = scopeOf(kind, top, head, base);
   if (scope === null) return newBaseline(kind, path, top, head, base);
   const held = heldNote(scope, top);
-  /** @type {Comparison} */
-  const verdict = { problems: [], adoption: null, unknowns: [], claims: [] };
+  const verdict = verdictOf({});
   for (const [key, count] of head) {
     const { was, lent } = baseEntry(key, scope);
-    if (lent !== null) verdict.claims.push({ key: lent, path, count });
+    if (lent !== null) verdict.claims.push({ ...lent, path, count });
     if (count <= (was ?? 0)) continue; // no rise (an enabled cop weighs 0)
     const doubt = was === undefined ? doubtOf(key, count, scope, base) : null;
     const shown = `${kind.show(...partsOf(key))} (${count})`;
-    if (doubt === null) verdict.problems.push(`${path}: grew: ${shown}${held} — fix the code; a baseline only shrinks`);
+    if (doubt === null) verdict.problems.push(grew(path, `${shown}${held}`));
     else verdict.unknowns.push(`${path}: ${shown} — ${doubt}: fix the code, or make that copy readable first`);
   }
   return verdict;
@@ -705,10 +720,9 @@ function newBaseline(kind, path, top, head, base) {
   const unread = files.flatMap((file) => unreadFor(base, posix.join(root, file)));
   if (unread.length > 0) {
     const unknown = `${path} is new, and ${namesOf(unread)} at the base was read in part (said above): its files may be recorded there — make that copy readable first`;
-    return { problems: [], adoption: null, unknowns: [unknown], claims: [] };
+    return verdictOf({ unknowns: [unknown] });
   }
-  const adoption = `${path} is new since ${base.history.name} (an adoption, ${kind.measure(head)}): review its entries`;
-  return { problems: [], adoption, unknowns: [], claims: [] };
+  return verdictOf({ adoption: `${path} is new since ${base.history.name} (an adoption, ${kind.measure(head)}): review its entries` });
 }
 
 /**
@@ -720,7 +734,7 @@ function newBaseline(kind, path, top, head, base) {
 function toldOrNot(tell, path) {
   /** @type {string[]} */
   const unknowns = [];
-  return toldAt(path, tell, unknowns) ?? { problems: [], adoption: null, unknowns, claims: [] };
+  return toldAt(path, tell, unknowns) ?? verdictOf({ unknowns });
 }
 
 /**
@@ -740,25 +754,27 @@ function toldAt(where, tell, unknowns) {
 }
 
 /**
- * A count the index lent is claimed by every head baseline that answered to it: two or more may split it (7 → 3 + 4)
- * but never exceed it together (7 → 7 + 7) — said once, naming every claimant (a claimant that alone exceeds it is
- * said by its own comparison as well: one run says both).
+ * A count the index lent is claimed by every head baseline that answered to it: two or more may split what the copies
+ * it left recorded together (7 → 3 + 4; 7 and 3 → 5 + 5) but never exceed it (7 → 7 + 7) — said once, naming every
+ * claimant, the entry shown from the working directory as the claimants are (a claimant above the largest count one
+ * copy carried is said by its own comparison as well: one run says both).
  * @param {Claim[]} claims
- * @param {Map<string, number>} lend
  * @param {Kind["show"]} show
+ * @param {string} prefix the working directory from the top
  * @returns {string[]}
  */
-function overLent(claims, lend, show) {
-  /** @type {Map<string, Claim[]>} */
+function overLent(claims, show, prefix) {
+  /** @type {Map<string, { total: number, paths: string[], held: number }>} */
   const byKey = new Map();
-  for (const claim of claims) byKey.set(claim.key, [...(byKey.get(claim.key) ?? []), claim]);
-  return [...byKey].flatMap(([key, group]) => {
-    const count = lend.get(key) ?? 0;
-    const total = group.reduce((all, claim) => all + claim.count, 0);
-    const paths = [...new Set(group.map((claim) => claim.path))];
-    if (paths.length < 2 || total <= count) return [];
-    const shown = show(...partsOf(key));
-    return [`${paths.join(", ")}: grew: ${shown} (${total} across them; ${count} lent at the base) — fix the code; a baseline only shrinks`];
+  for (const { key, path, count, total } of claims) {
+    const group = byKey.get(key) ?? { total, paths: [], held: 0 };
+    byKey.set(key, { total, paths: [...group.paths, path], held: group.held + count });
+  }
+  return [...byKey].flatMap(([key, { total, paths, held }]) => {
+    if (paths.length < 2 || held <= total) return [];
+    const [file, label] = partsOf(key);
+    const shown = show(posix.relative(cwdOf(prefix), file), label);
+    return [grew(paths.join(", "), `${shown} (${held} across them; ${total} lent at the base)`)];
   });
 }
 
@@ -770,7 +786,7 @@ function overLent(claims, lend, show) {
  * @returns {{ problems: string[], adoptions: string[], unknowns: string[] }}
  */
 function growth(history, tracked) {
-  const results = KINDS.flatMap((kind) => {
+  const results = KINDS.map((kind) => {
     /** @type {Copy[] | undefined} */
     let copies;
     const all = () => (copies ??= named(history.base, kind.name).map((path) => copyAt(kind, path, history)));
@@ -786,14 +802,13 @@ function growth(history, tracked) {
       copies: all,
     };
     const told = named(tracked, kind.name).map((path) => toldOrNot(() => compare(kind, path, base), path));
-    const claims = told.flatMap((comparison) => comparison.claims);
-    const shared = claims.length === 0 ? [] : overLent(claims, base.index().lend, kind.show);
-    return [...told, { problems: shared, adoption: null, unknowns: [], claims: [] }];
+    return { told, shared: overLent(told.flatMap(({ claims }) => claims), kind.show, history.prefix) };
   });
+  const told = results.flatMap((result) => result.told);
   return {
-    problems: [...movedAway(history.moved), ...results.flatMap(({ problems }) => problems)],
-    adoptions: results.flatMap(({ adoption }) => (adoption === null ? [] : [adoption])),
-    unknowns: results.flatMap(({ unknowns }) => unknowns),
+    problems: [...movedAway(history.moved), ...told.flatMap(({ problems }) => problems), ...results.flatMap(({ shared }) => shared)],
+    adoptions: told.flatMap(({ adoption }) => (adoption === null ? [] : [adoption])),
+    unknowns: told.flatMap(({ unknowns }) => unknowns),
   };
 }
 
@@ -845,7 +860,7 @@ const perFile = (entries) => entries.map(([key, lines]) => `${partsOf(key)[0]} (
 function holdProblems(reportPath, { prefix, moved }) {
   const measured = new Map([...measuredDuplicates(reportPath)].map(([file, lines]) => [keyOf(file, ""), lines]));
   const written = duplicateEntries(readFileSync(DUPLICATES, "utf8"));
-  const here = (/** @type {string} */ key) => keyOf(posix.relative(prefix || ".", partsOf(topKey(key, prefix, moved))[0]), "");
+  const here = (/** @type {string} */ key) => keyOf(posix.relative(cwdOf(prefix), partsOf(topKey(key, prefix, moved))[0]), "");
   const recorded = new Map([...written].map(([key, lines]) => [here(key), lines]));
   const rose = perFile(grown(recorded, measured));
   const fell = perFile(grown(measured, recorded));
@@ -932,8 +947,10 @@ function pushedFrom() {
   return /^[0-9a-f]{40}$/.test(before) && !/^0+$/.test(before) ? before : null;
 }
 
+const MODES = ["--write-duplicates", "--counts"]; // each a run of its own: no check, and never two together
+const CHECKS = ["--base", "--duplicates"];
 const VALUED = new Set(["--base", "--duplicates", "--write-duplicates"]);
-const ARGS = new Set([...VALUED, "--counts"]);
+const ARGS = new Set([...MODES, ...CHECKS]);
 
 /**
  * @param {string[]} argv
@@ -945,8 +962,8 @@ export function parseArgs(argv) {
   if (unknown.length > 0) throw new Error(`unknown argument ${unknown.join(" ")} — ${usage}`);
   const twice = [...ARGS].filter((flag) => argv.filter((arg) => arg === flag).length > 1);
   if (twice.length > 0) throw new Error(`${twice.join(" ")} given twice — ${usage}`);
-  const modes = ["--write-duplicates", "--counts"].filter((flag) => argv.includes(flag));
-  const checks = ["--base", "--duplicates"].filter((flag) => argv.includes(flag));
+  const modes = MODES.filter((flag) => argv.includes(flag));
+  const checks = CHECKS.filter((flag) => argv.includes(flag));
   if (modes.length + (checks.length > 0 ? 1 : 0) > 1) throw new Error(`${[...modes, ...checks].join(" ")} together — ${usage}`);
   const value = (/** @type {string} */ flag) => {
     if (!argv.includes(flag)) return null;
@@ -981,7 +998,7 @@ function forkOf({ ref: base, pushed }) {
   try {
     git("rev-parse", "--verify", "--quiet", `${base}^{commit}`);
   } catch (error) {
-    const said = String(/** @type {{ stderr?: unknown }} */ (error).stderr ?? "").trim().split("\n")[0];
+    const said = firstLine(String(/** @type {{ stderr?: unknown }} */ (error).stderr ?? "").trim());
     const forced = pushed ? "; a force push discards the commit it replaced — name the base (BASELINE_RATCHET_BASE)" : "";
     throw new Error(said ? `git: ${said}${forced}` : `base ${base} not found — fetch it (CI: fetch-depth: 0)${forced}`, { cause: error });
   }
@@ -1037,7 +1054,7 @@ export function main(argv) {
     }
     return check(options);
   } catch (error) {
-    const reason = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    const reason = firstLine(error instanceof Error ? error.message : String(error));
     console.error(`baseline-ratchet: cannot tell — ${reason}`);
     if (isDefect(error) && error instanceof Error) console.error(error.stack); // a defect of this file: where it is
     return 2;

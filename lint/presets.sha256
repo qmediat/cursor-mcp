@@ -1,5 +1,5 @@
 # sha256 of the shared presets as a project carries them; copied beside them as lint/presets.sha256.
 579a5de3cd91ee973390ad829384b5cfbd401459b633e468ceb056d496d648bf  lint/structure.mjs
-c9cecf05c00489fd0d284584462e9e15d2ef56af32b2dbda3a942f28c13ada34  lint/baseline-ratchet.mjs
+2d650a0b19a7185c4fb05a12707d77c5cf7d62a8020e743aa75dc5a1d001a5d8  lint/baseline-ratchet.mjs
 5a3b695d02cbdc02273311a83e1f87a9c3801cdfd4940b16efb156c528611419  lint/rubocop-structure.yml
 e05da86629f75f5e657248651dcd184edf105fce72086acc05a353f0cd59a1f8  lint/rubocop-rspec.yml
