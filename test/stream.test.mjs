@@ -3,12 +3,10 @@
 // that asked for progress. No real Cursor CLI involved.
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import { test } from "node:test";
 import { fakeAgentDir } from "./support/fake-agent.mjs";
 
 const fake = await fakeAgentDir("cursor-mcp-stream-");
-const { dir } = fake;
 const EVENTS = [
   {
     type: "system",
