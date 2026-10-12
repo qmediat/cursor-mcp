@@ -1,18 +1,18 @@
 // The executor against a fake `cursor-agent` on PATH: the client's signal reaches the child, SIGKILL follows SIGTERM
 // after the grace period, and the semaphore slot is held until the child is gone. No real Cursor CLI involved.
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { test } from "node:test";
+import { fakeAgentDir } from "./support/fake-agent.mjs";
 
-const dir = await mkdtemp(join(tmpdir(), "cursor-mcp-fake-"));
+const fake = await fakeAgentDir("cursor-mcp-fake-");
+const { dir } = fake;
 const pidFile = join(dir, "child.pid");
 // a cursor-agent that ignores SIGTERM and lives 30 s: only SIGKILL ends it (one process, so `close` follows the kill);
 // with FAKE_TERM_MARK it notes a SIGTERM in <pid file>.term and exits on it
-await writeFile(
-  join(dir, "cursor-agent"),
+await fake.write(
   `#!/usr/bin/env node
 const fs = require("node:fs");
 if (process.env.FAKE_TERM_MARK) {
@@ -38,8 +38,7 @@ if (process.env.FAKE_EXITS_AT_ONCE) {
 setTimeout(() => {}, 30_000);
 `,
 );
-await chmod(join(dir, "cursor-agent"), 0o755);
-process.env.PATH = `${dir}:${process.env.PATH}`;
+process.env.PATH = fake.path;
 const GRACE_MS = 300; // the kill grace of the calls made in this process: SIGKILL follows SIGTERM after it
 process.env.CURSOR_KILL_GRACE_MS = String(GRACE_MS);
 process.env.CURSOR_MAX_CONCURRENCY = "1";

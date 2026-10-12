@@ -2,12 +2,13 @@
 // changed and the answer in text and structuredContent, and sends one progress notification per event to a client
 // that asked for progress. No real Cursor CLI involved.
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fakeAgentDir } from "./support/fake-agent.mjs";
 
-const dir = await mkdtemp(join(tmpdir(), "cursor-mcp-stream-"));
+const fake = await fakeAgentDir("cursor-mcp-stream-");
+const { dir } = fake;
 const EVENTS = [
   {
     type: "system",
@@ -104,8 +105,7 @@ const EVENTS = [
  * as JSON, optionally split at a byte offset with a pause between the halves. */
 async function writeFake(lines, splitAt = 0) {
   const text = `${lines.map((l) => (typeof l === "string" ? l : JSON.stringify(l))).join("\n")}\n`;
-  await writeFile(
-    join(dir, "cursor-agent"),
+  await fake.write(
     `#!/usr/bin/env node
 const out = Buffer.from(${JSON.stringify(text)}, "utf8");
 const at = ${splitAt};
@@ -113,10 +113,9 @@ if (at > 0) { process.stdout.write(out.subarray(0, at)); setTimeout(() => proces
 else process.stdout.write(out);
 `,
   );
-  await chmod(join(dir, "cursor-agent"), 0o755);
 }
 await writeFake(EVENTS);
-process.env.PATH = `${dir}:${process.env.PATH}`;
+process.env.PATH = fake.path;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const { handleCursorAgent } = await import("../dist/tools/cursor-agent.js");
@@ -273,7 +272,7 @@ test("a run that exits non-zero but printed a result event reports that result, 
     { type: "system", subtype: "init", model: "m", session_id: "s-5" },
     { type: "result", subtype: "error", is_error: true, result: "The model refused", session_id: "s-5" },
   ]);
-  const path = join(dir, "cursor-agent");
+  const path = fake.bin;
   const { readFile: rf } = await import("node:fs/promises");
   await writeFile(path, `${await rf(path, "utf8")}process.exitCode = 1;\n`);
   const result = await handleCursorAgent({ prompt: "x" });

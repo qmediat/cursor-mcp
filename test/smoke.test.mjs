@@ -1,15 +1,16 @@
-// Smoke test: the built server starts over stdio, completes the MCP handshake and lists its five tools.
-// Runs with Node's built-in test runner (`npm test`, which builds first), no extra dependency. `initialize` and
-// `tools/list` never spawn `cursor-agent`, so the test needs neither the Cursor CLI nor any credential.
+// Smoke test: the built server starts over stdio, completes the MCP handshake and lists its five tools, and a tool
+// whose run fails answers with the tool's error result. Runs with Node's built-in test runner (`npm test`, which builds
+// first), no extra dependency; the failing run is a fake cursor-agent (test/support/fake-agent.mjs), so neither the
+// Cursor CLI nor any credential is needed.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { FAKE_AGENT_SKIP, fakeAgentDir } from "./support/fake-agent.mjs";
 
 const SERVER = fileURLToPath(new URL("../dist/index.js", import.meta.url));
 const PACKAGE_VERSION = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
@@ -110,26 +111,30 @@ test("the server completes the MCP handshake, advertises the package version and
   }
 });
 
-test("a tool whose run fails answers with the tool's error result — the CLI's exit code and stderr — never a protocol error", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "cursor-mcp-failing-agent-"));
-  writeFileSync(join(dir, "cursor-agent"), "#!/bin/sh\necho 'no such model' >&2\nexit 3\n", { mode: 0o755 });
-  const server = startServer({ PATH: `${dir}${delimiter}${process.env.PATH}` }); // the fake first; `which` itself is on PATH
-  try {
-    await server.request("initialize", {
-      protocolVersion: "2025-06-18",
-      capabilities: {},
-      clientInfo: { name: "smoke-test", version: "0.0.0" },
-    });
-    server.notify("notifications/initialized");
-    const call = await server.request("tools/call", { name: "cursor_agent", arguments: { prompt: "x" } });
-    assert.equal(call.error, undefined, JSON.stringify(call.error));
-    assert.equal(call.result.isError, true);
-    assert.equal(
-      call.result.content[0].text,
-      "Cursor CLI error: cursor-agent exited with code 3\nExit code: 3\nstderr: no such model",
-    );
-  } finally {
-    await server.stop();
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
+test(
+  "a tool whose run fails answers with the tool's error result — the CLI's exit code and stderr — never a protocol error",
+  { skip: FAKE_AGENT_SKIP },
+  async () => {
+    const fake = await fakeAgentDir("cursor-mcp-failing-agent-");
+    await fake.write("#!/bin/sh\necho 'no such model' >&2\nexit 3\n");
+    const server = startServer({ PATH: fake.path }); // the fake first; `which` itself is on that PATH
+    try {
+      await server.request("initialize", {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "smoke-test", version: "0.0.0" },
+      });
+      server.notify("notifications/initialized");
+      const call = await server.request("tools/call", { name: "cursor_agent", arguments: { prompt: "x" } });
+      assert.equal(call.error, undefined, JSON.stringify(call.error));
+      assert.equal(call.result.isError, true);
+      assert.equal(
+        call.result.content[0].text,
+        "Cursor CLI error: cursor-agent exited with code 3\nExit code: 3\nstderr: no such model",
+      );
+    } finally {
+      await server.stop();
+      await rm(fake.dir, { recursive: true, force: true });
+    }
+  },
+);
