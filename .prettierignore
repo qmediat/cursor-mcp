@@ -1,4 +1,4 @@
-# what ESLint ignores (eslint.config.mjs), and the vendored copies of the shared presets: formatted where they
-# are kept (docs/SYSTEMIC.md §1); .gitignore is read too
+# Prettier reads .gitignore too; with it, this list skips everything eslint.config.mjs ignores, and the vendored
+# copies of the shared presets (ESLint lints them; they are formatted where they are kept — docs/SYSTEMIC.md §1)
 /lint/structure.mjs
 /lint/baseline-ratchet.mjs
