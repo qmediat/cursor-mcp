@@ -10,6 +10,8 @@
 - Development only: the cancellation tests set the fake's flags, spawn the test server and check the helper's
   deadline kill through one helper each, so the formatter adopted next adds no repeated block; the 48 duplicate lines
   recorded for `test/cancel.test.mjs` are gone.
+- Development only: Prettier formats the code (`npm run format`; CI runs `npm run format:check`), printWidth 120 —
+  the style the code already had. The one-time reformat is its own commit, named in `.git-blame-ignore-revs`.
 - Development only: tests pin that the server's shutdown sends SIGTERM before SIGKILL (an agent that exits on SIGTERM
   sees it) and that an exit the server cannot delay SIGKILLs every group (no SIGTERM, no agent left); until now the
   deadline SIGKILL alone made every shutdown test pass, and the exit path had no test.

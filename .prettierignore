@@ -1,0 +1,3 @@
+# vendored copies of the shared presets: formatted where they are kept (docs/SYSTEMIC.md §1)
+lint/structure.mjs
+lint/baseline-ratchet.mjs
