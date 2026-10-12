@@ -7,6 +7,9 @@
 - Development only: `npm run lint` checks the structure of the code with a shared preset (ESLint with Babel's
   TypeScript parser — TypeScript 7 has no JavaScript API for typescript-eslint —, jscpd for repeated blocks, a ratchet
   that keeps the recorded baselines from growing); CI runs it. Nothing in the published package changes.
+- Development only: the cancellation tests set the fake's flags, spawn the test server and check the helper's
+  deadline kill through one helper each, so the formatter adopted next adds no repeated block; the 48 duplicate lines
+  recorded for `test/cancel.test.mjs` are gone.
 
 ## [1.2.1] - 2026-10-06
 

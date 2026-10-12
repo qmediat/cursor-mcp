@@ -60,6 +60,40 @@ const childPid = async (notPid = 0) => {
   }
   throw new Error("the fake cursor-agent did not start");
 };
+// the fake's behaviour flags (FAKE_*) for one test body, removed again whatever the body did
+const withFake = async (flags, body) => {
+  for (const flag of flags) process.env[flag] = "1";
+  try {
+    return await body();
+  } finally {
+    for (const flag of flags) delete process.env[flag];
+  }
+};
+const helperPidOf = async () => Number(await readFile(`${pidFile}.helper`, "utf8"));
+// a call aborted while its helper ignores SIGTERM: the helper outlives SIGTERM, SIGKILL reaches it at the deadline
+const assertHelperKilledAtDeadline = async (survived) => {
+  const ac = new AbortController();
+  const call = execute({ args: ["-p", "x"], timeoutMs: 10_000, signal: ac.signal });
+  await childPid();
+  const helperPid = await helperPidOf();
+  await sleep(200); // the helper's node is up and ignores SIGTERM
+  ac.abort();
+  await assert.rejects(call, CursorAbortError);
+  assert.ok(alive(helperPid), survived);
+  await sleep(300 + 300);
+  assert.ok(!alive(helperPid), "SIGKILL reached the group at the deadline");
+};
+// a server process with the shutdown handlers installed that runs `calls` (its execute calls) until a signal ends it
+const spawnServer = async (calls, env) => {
+  const { spawn } = await import("node:child_process");
+  const script = `
+    const { execute, installShutdownHandlers } = await import(${JSON.stringify(new URL("../dist/executor.js", import.meta.url).href)});
+    installShutdownHandlers();
+    ${calls}
+    setTimeout(() => {}, 60_000);
+  `;
+  return spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: ["ignore", "ignore", "inherit"], env: { ...process.env, ...env } });
+};
 
 test("a cancelled request kills a child that ignores SIGTERM (SIGKILL after the grace period) and frees the slot only then", async () => {
   await fresh();
@@ -102,21 +136,16 @@ test("a signal aborted before the call still ends the child: SIGTERM, then SIGKI
 test("a grandchild holding the pipes neither survives the cancellation nor keeps the request alive", async () => {
   await fresh();
   const ac = new AbortController();
-  process.env.FAKE_GRANDCHILD = "1";
-  let pid;
-  let helperPid;
-  try {
+  const { pid, helperPid } = await withFake(["FAKE_GRANDCHILD"], async () => {
     const call = execute({ args: ["-p", "x"], timeoutMs: 10_000, signal: ac.signal });
-    pid = await childPid();
-    helperPid = Number(await readFile(`${pidFile}.helper`, "utf8"));
-    assert.ok(alive(helperPid), "the helper runs");
+    const started = { pid: await childPid(), helperPid: await helperPidOf() };
+    assert.ok(alive(started.helperPid), "the helper runs");
     const aborted = Date.now();
     ac.abort();
     await assert.rejects(call, CursorAbortError);
     assert.ok(Date.now() - aborted < 5_000, "settled without waiting for the helper's 30 s");
-  } finally {
-    delete process.env.FAKE_GRANDCHILD;
-  }
+    return started;
+  });
   await sleep(100);
   assert.ok(!alive(pid), "the child is gone");
   assert.ok(!alive(helperPid), "the helper went with its process group");
@@ -142,63 +171,30 @@ test("a request cancelled while it waits for a slot leaves the queue at once; th
 
 test("a leader that exits while a helper holds the pipes: the call settles with its output after the grace, the helper is killed", async () => {
   await fresh();
-  process.env.FAKE_GRANDCHILD = "1";
-  process.env.FAKE_EXITS_AT_ONCE = "1";
-  let helperPid;
-  try {
+  const helperPid = await withFake(["FAKE_GRANDCHILD", "FAKE_EXITS_AT_ONCE"], async () => {
     const started = Date.now();
     const result = await execute({ args: ["-p", "x"], timeoutMs: 10_000, parseJson: false });
-    helperPid = Number(await readFile(`${pidFile}.helper`, "utf8"));
     assert.equal(result.exitCode, 0);
     assert.equal(result.stdout, "done", "what the leader wrote before it exited");
     assert.ok(Date.now() - started < 5_000, "settled without the helper's 30 s");
-  } finally {
-    delete process.env.FAKE_GRANDCHILD;
-    delete process.env.FAKE_EXITS_AT_ONCE;
-  }
+    return helperPidOf();
+  });
   await sleep(100);
   assert.ok(!alive(helperPid), "the helper was signalled with the group");
 });
 
 test("a helper that ignores SIGTERM is SIGKILLed at the deadline even though the leader obeyed SIGTERM", async () => {
   await fresh();
-  process.env.FAKE_GRANDCHILD = "1";
-  process.env.FAKE_STUBBORN_HELPER = "1";
-  process.env.FAKE_OBEYS_TERM = "1";
-  let helperPid;
-  try {
-    const ac = new AbortController();
-    const call = execute({ args: ["-p", "x"], timeoutMs: 10_000, signal: ac.signal });
-    await childPid();
-    helperPid = Number(await readFile(`${pidFile}.helper`, "utf8"));
-    await sleep(200); // the helper's node is up and ignores SIGTERM
-    ac.abort();
-    await assert.rejects(call, CursorAbortError);
-    assert.ok(alive(helperPid), "the helper survived SIGTERM (the leader did not)");
-    await sleep(300 + 300);
-    assert.ok(!alive(helperPid), "SIGKILL reached the group at the deadline");
-  } finally {
-    delete process.env.FAKE_GRANDCHILD;
-    delete process.env.FAKE_STUBBORN_HELPER;
-    delete process.env.FAKE_OBEYS_TERM;
-  }
+  await withFake(["FAKE_GRANDCHILD", "FAKE_STUBBORN_HELPER", "FAKE_OBEYS_TERM"], () =>
+    assertHelperKilledAtDeadline("the helper survived SIGTERM (the leader did not)"),
+  );
 });
 
 test("the server's own SIGTERM ends every running cursor-agent group", async () => {
   await fresh();
-  const { spawn } = await import("node:child_process");
-  const script = `
-    const { execute, installShutdownHandlers } = await import(${JSON.stringify(new URL("../dist/executor.js", import.meta.url).href)});
-    installShutdownHandlers();
-    execute({ args: ["-p", "x"], timeoutMs: 30_000 }).catch(() => {});
-    setTimeout(() => {}, 60_000);
-  `;
-  const server = spawn(process.execPath, ["--input-type=module", "-e", script], {
-    stdio: ["ignore", "ignore", "inherit"],
-    env: { ...process.env, FAKE_GRANDCHILD: "1" },
-  });
+  const server = await spawnServer(`execute({ args: ["-p", "x"], timeoutMs: 30_000 }).catch(() => {});`, { FAKE_GRANDCHILD: "1" });
   const pid = await childPid();
-  const helperPid = Number(await readFile(`${pidFile}.helper`, "utf8"));
+  const helperPid = await helperPidOf();
   assert.ok(alive(pid) && alive(helperPid));
   server.kill("SIGTERM");
   await new Promise((r) => server.once("exit", r));
@@ -209,19 +205,9 @@ test("the server's own SIGTERM ends every running cursor-agent group", async () 
 
 test("the server's shutdown reaches a helper whose leader already exited (the group outlives its leader)", async () => {
   await fresh();
-  const { spawn } = await import("node:child_process");
-  const script = `
-    const { execute, installShutdownHandlers } = await import(${JSON.stringify(new URL("../dist/executor.js", import.meta.url).href)});
-    installShutdownHandlers();
-    execute({ args: ["-p", "x"], timeoutMs: 30_000, parseJson: false }).catch(() => {});
-    setTimeout(() => {}, 60_000);
-  `;
-  const server = spawn(process.execPath, ["--input-type=module", "-e", script], {
-    stdio: ["ignore", "ignore", "inherit"],
-    env: { ...process.env, FAKE_GRANDCHILD: "1", FAKE_STUBBORN_HELPER: "1", FAKE_EXITS_AT_ONCE: "1", CURSOR_KILL_GRACE_MS: "2000" },
-  });
+  const server = await spawnServer(`execute({ args: ["-p", "x"], timeoutMs: 30_000, parseJson: false }).catch(() => {});`, { FAKE_GRANDCHILD: "1", FAKE_STUBBORN_HELPER: "1", FAKE_EXITS_AT_ONCE: "1", CURSOR_KILL_GRACE_MS: "2000" });
   const pid = await childPid();
-  const helperPid = Number(await readFile(`${pidFile}.helper`, "utf8"));
+  const helperPid = await helperPidOf();
   await sleep(300); // the leader has exited, the helper's node is up and ignores SIGTERM
   assert.ok(!alive(pid), "the leader exited");
   assert.ok(alive(helperPid), "the helper lives on");
@@ -233,45 +219,16 @@ test("the server's shutdown reaches a helper whose leader already exited (the gr
 
 test("a stubborn helper that redirected its stdio (the pipes close with the leader) is still SIGKILLed at the deadline", async () => {
   await fresh();
-  process.env.FAKE_GRANDCHILD = "1";
-  process.env.FAKE_STUBBORN_HELPER = "1";
-  process.env.FAKE_HELPER_NO_PIPES = "1";
-  process.env.FAKE_OBEYS_TERM = "1";
-  let helperPid;
-  try {
-    const ac = new AbortController();
-    const call = execute({ args: ["-p", "x"], timeoutMs: 10_000, signal: ac.signal });
-    await childPid();
-    helperPid = Number(await readFile(`${pidFile}.helper`, "utf8"));
-    await sleep(200);
-    ac.abort();
-    await assert.rejects(call, CursorAbortError);
-    assert.ok(alive(helperPid), "the helper survived SIGTERM and holds no pipe");
-    await sleep(300 + 300);
-    assert.ok(!alive(helperPid), "SIGKILL reached the group at the deadline");
-  } finally {
-    delete process.env.FAKE_GRANDCHILD;
-    delete process.env.FAKE_STUBBORN_HELPER;
-    delete process.env.FAKE_HELPER_NO_PIPES;
-    delete process.env.FAKE_OBEYS_TERM;
-  }
+  await withFake(["FAKE_GRANDCHILD", "FAKE_STUBBORN_HELPER", "FAKE_HELPER_NO_PIPES", "FAKE_OBEYS_TERM"], () =>
+    assertHelperKilledAtDeadline("the helper survived SIGTERM and holds no pipe"),
+  );
 });
 
 test("a second signal during the shutdown grace ends the server at once, SIGKILL first", async () => {
   await fresh();
-  const { spawn } = await import("node:child_process");
-  const script = `
-    const { execute, installShutdownHandlers } = await import(${JSON.stringify(new URL("../dist/executor.js", import.meta.url).href)});
-    installShutdownHandlers();
-    execute({ args: ["-p", "x"], timeoutMs: 30_000, parseJson: false }).catch(() => {});
-    setTimeout(() => {}, 60_000);
-  `;
-  const server = spawn(process.execPath, ["--input-type=module", "-e", script], {
-    stdio: ["ignore", "ignore", "inherit"],
-    env: { ...process.env, FAKE_GRANDCHILD: "1", FAKE_STUBBORN_HELPER: "1", FAKE_HELPER_NO_PIPES: "1", FAKE_EXITS_AT_ONCE: "1", CURSOR_KILL_GRACE_MS: "20000" },
-  });
+  const server = await spawnServer(`execute({ args: ["-p", "x"], timeoutMs: 30_000, parseJson: false }).catch(() => {});`, { FAKE_GRANDCHILD: "1", FAKE_STUBBORN_HELPER: "1", FAKE_HELPER_NO_PIPES: "1", FAKE_EXITS_AT_ONCE: "1", CURSOR_KILL_GRACE_MS: "20000" });
   await childPid();
-  const helperPid = Number(await readFile(`${pidFile}.helper`, "utf8"));
+  const helperPid = await helperPidOf();
   await sleep(300);
   assert.ok(alive(helperPid));
   const signalled = Date.now();
@@ -286,19 +243,14 @@ test("a second signal during the shutdown grace ends the server at once, SIGKILL
 
 test("a cancelled call whose group died at once leaves nothing behind: the server's shutdown does not wait the grace", async () => {
   await fresh();
-  const { spawn } = await import("node:child_process");
-  const script = `
-    const { execute, installShutdownHandlers } = await import(${JSON.stringify(new URL("../dist/executor.js", import.meta.url).href)});
-    installShutdownHandlers();
+  const server = await spawnServer(
+    `
     const ac = new AbortController();
     execute({ args: ["-p", "x"], timeoutMs: 30_000, signal: ac.signal }).catch(() => {});
     setTimeout(() => ac.abort(), 700);
-    setTimeout(() => {}, 60_000);
-  `;
-  const server = spawn(process.execPath, ["--input-type=module", "-e", script], {
-    stdio: ["ignore", "ignore", "inherit"],
-    env: { ...process.env, FAKE_OBEYS_TERM: "1", CURSOR_KILL_GRACE_MS: "20000" },
-  });
+    `,
+    { FAKE_OBEYS_TERM: "1", CURSOR_KILL_GRACE_MS: "20000" },
+  );
   const pid = await childPid();
   await sleep(1_000); // the abort happened, the leader obeyed SIGTERM, the group is empty
   assert.ok(!alive(pid));
