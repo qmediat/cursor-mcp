@@ -52,16 +52,16 @@
   "author": "Quantum Media Technologies <dev@qmediat.io> (https://www.qmediat.io)",
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.32.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "zod": "4.6.5"
   },
   "devDependencies": {
-    "@babel/core": "8.0.6",
-    "@babel/eslint-parser": "8.0.6",
+    "@babel/core": "8.0.7",
+    "@babel/eslint-parser": "8.0.7",
     "@eslint-community/eslint-plugin-eslint-comments": "4.8.1",
     "@types/node": "22.20.5",
     "eslint": "10.12.0",
-    "jscpd": "5.3.2",
+    "jscpd": "5.4.1",
     "prettier": "3.9.9",
     "typescript": "7.0.2"
   },
