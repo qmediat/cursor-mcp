@@ -4,8 +4,8 @@ import assert from "node:assert/strict";
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
-import { test } from "node:test";
-import { fakeAgentDir } from "./support/fake-agent.mjs";
+import { after, test } from "node:test";
+import { FAKE_AGENT_SKIP, fakeAgentDir } from "./support/fake-agent.mjs";
 
 const fake = await fakeAgentDir("cursor-mcp-fake-");
 const { dir } = fake;
@@ -39,6 +39,7 @@ setTimeout(() => {}, 30_000);
 `,
 );
 process.env.PATH = fake.path;
+after(() => fake.remove());
 const GRACE_MS = 300; // the kill grace of the calls made in this process: SIGKILL follows SIGTERM after it
 process.env.CURSOR_KILL_GRACE_MS = String(GRACE_MS);
 process.env.CURSOR_MAX_CONCURRENCY = "1";
@@ -115,106 +116,130 @@ const spawnServer = ({ call = {}, flags = [], graceMs, abortAfterMs, exitAfterMs
   });
 };
 
-test("a cancelled request kills a child that ignores SIGTERM (SIGKILL after the grace period) and frees the slot only then", async () => {
-  await fresh();
-  const ac = new AbortController();
-  const first = execute({ args: ["-p", "x"], timeoutMs: 10_000, signal: ac.signal });
-  const pid = await childPid();
-  assert.ok(alive(pid), "the fake child runs");
-  const aborted = Date.now();
-  ac.abort();
-  await assert.rejects(first, CursorAbortError);
-  const settledAfter = Date.now() - aborted;
-  assert.ok(
-    settledAfter >= GRACE_MS - 50,
-    `the call settles only once the child is gone (${settledAfter} ms after abort)`,
-  );
-  assert.ok(!alive(pid), "the child is gone after SIGKILL");
-  // the slot was held while the child lived: a second call with concurrency 1 starts only now
-  const ac2 = new AbortController();
-  const second = execute({ args: ["-p", "y"], timeoutMs: 10_000, signal: ac2.signal });
-  const pid2 = await childPid(pid);
-  assert.ok(alive(pid2), "the second fake child runs");
-  ac2.abort();
-  await assert.rejects(second, CursorAbortError);
-});
-
-test("a signal aborted before the call still ends the child: SIGTERM, then SIGKILL after the grace period", async () => {
-  await fresh();
-  const ac = new AbortController();
-  ac.abort();
-  const call = execute({ args: ["-p", "x"], timeoutMs: 10_000, signal: ac.signal });
-  await assert.rejects(call, CursorAbortError);
-  // whatever was spawned is gone and the slot is free: the next call starts at once
-  await fresh();
-  const ac2 = new AbortController();
-  const next = execute({ args: ["-p", "y"], timeoutMs: 10_000, signal: ac2.signal });
-  const pid = await childPid();
-  assert.ok(alive(pid));
-  ac2.abort();
-  await assert.rejects(next, CursorAbortError);
-  assert.ok(!alive(pid));
-});
-
-test("a grandchild holding the pipes neither survives the cancellation nor keeps the request alive", async () => {
-  await fresh();
-  const ac = new AbortController();
-  const { pid, helperPid } = await withFake(["FAKE_GRANDCHILD"], async () => {
-    const call = execute({ args: ["-p", "x"], timeoutMs: 10_000, signal: ac.signal });
-    const started = { pid: await childPid(), helperPid: await helperPidOf() };
-    assert.ok(alive(started.helperPid), "the helper runs");
+test(
+  "a cancelled request kills a child that ignores SIGTERM (SIGKILL after the grace period) and frees the slot only then",
+  { skip: FAKE_AGENT_SKIP },
+  async () => {
+    await fresh();
+    const ac = new AbortController();
+    const first = execute({ args: ["-p", "x"], timeoutMs: 10_000, signal: ac.signal });
+    const pid = await childPid();
+    assert.ok(alive(pid), "the fake child runs");
     const aborted = Date.now();
     ac.abort();
+    await assert.rejects(first, CursorAbortError);
+    const settledAfter = Date.now() - aborted;
+    assert.ok(
+      settledAfter >= GRACE_MS - 50,
+      `the call settles only once the child is gone (${settledAfter} ms after abort)`,
+    );
+    assert.ok(!alive(pid), "the child is gone after SIGKILL");
+    // the slot was held while the child lived: a second call with concurrency 1 starts only now
+    const ac2 = new AbortController();
+    const second = execute({ args: ["-p", "y"], timeoutMs: 10_000, signal: ac2.signal });
+    const pid2 = await childPid(pid);
+    assert.ok(alive(pid2), "the second fake child runs");
+    ac2.abort();
+    await assert.rejects(second, CursorAbortError);
+  },
+);
+
+test(
+  "a signal aborted before the call still ends the child: SIGTERM, then SIGKILL after the grace period",
+  { skip: FAKE_AGENT_SKIP },
+  async () => {
+    await fresh();
+    const ac = new AbortController();
+    ac.abort();
+    const call = execute({ args: ["-p", "x"], timeoutMs: 10_000, signal: ac.signal });
     await assert.rejects(call, CursorAbortError);
-    assert.ok(Date.now() - aborted < 5_000, "settled without waiting for the helper's 30 s");
-    return started;
-  });
-  await sleep(100);
-  assert.ok(!alive(pid), "the child is gone");
-  assert.ok(!alive(helperPid), "the helper went with its process group");
-});
+    // whatever was spawned is gone and the slot is free: the next call starts at once
+    await fresh();
+    const ac2 = new AbortController();
+    const next = execute({ args: ["-p", "y"], timeoutMs: 10_000, signal: ac2.signal });
+    const pid = await childPid();
+    assert.ok(alive(pid));
+    ac2.abort();
+    await assert.rejects(next, CursorAbortError);
+    assert.ok(!alive(pid));
+  },
+);
 
-test("a request cancelled while it waits for a slot leaves the queue at once; the running child is untouched", async () => {
-  await fresh();
-  const ac = new AbortController();
-  const running = execute({ args: ["-p", "x"], timeoutMs: 10_000, signal: ac.signal });
-  const pid = await childPid();
-  const acQueued = new AbortController();
-  const queued = execute({ args: ["-p", "y"], timeoutMs: 10_000, signal: acQueued.signal });
-  await sleep(100);
-  const aborted = Date.now();
-  acQueued.abort();
-  await assert.rejects(queued, CursorAbortError);
-  assert.ok(Date.now() - aborted < 200, "no grace period: nothing was spawned for it");
-  assert.ok(alive(pid), "the running child is unaffected");
-  assert.equal(Number(await readFile(pidFile, "utf8")), pid, "the queued call never spawned");
-  ac.abort();
-  await assert.rejects(running, CursorAbortError);
-});
+test(
+  "a grandchild holding the pipes neither survives the cancellation nor keeps the request alive",
+  { skip: FAKE_AGENT_SKIP },
+  async () => {
+    await fresh();
+    const ac = new AbortController();
+    const { pid, helperPid } = await withFake(["FAKE_GRANDCHILD"], async () => {
+      const call = execute({ args: ["-p", "x"], timeoutMs: 10_000, signal: ac.signal });
+      const started = { pid: await childPid(), helperPid: await helperPidOf() };
+      assert.ok(alive(started.helperPid), "the helper runs");
+      const aborted = Date.now();
+      ac.abort();
+      await assert.rejects(call, CursorAbortError);
+      assert.ok(Date.now() - aborted < 5_000, "settled without waiting for the helper's 30 s");
+      return started;
+    });
+    await sleep(100);
+    assert.ok(!alive(pid), "the child is gone");
+    assert.ok(!alive(helperPid), "the helper went with its process group");
+  },
+);
 
-test("a leader that exits while a helper holds the pipes: the call settles with its output after the grace, the helper is killed", async () => {
-  await fresh();
-  const helperPid = await withFake(["FAKE_GRANDCHILD", "FAKE_EXITS_AT_ONCE"], async () => {
-    const started = Date.now();
-    const result = await execute({ args: ["-p", "x"], timeoutMs: 10_000, parseJson: false });
-    const helperPid = await helperPidOf();
-    assert.equal(result.exitCode, 0);
-    assert.equal(result.stdout, "done", "what the leader wrote before it exited");
-    assert.ok(Date.now() - started < 5_000, "settled without the helper's 30 s");
-    return helperPid;
-  });
-  await sleep(100);
-  assert.ok(!alive(helperPid), "the helper was signalled with the group");
-});
+test(
+  "a request cancelled while it waits for a slot leaves the queue at once; the running child is untouched",
+  { skip: FAKE_AGENT_SKIP },
+  async () => {
+    await fresh();
+    const ac = new AbortController();
+    const running = execute({ args: ["-p", "x"], timeoutMs: 10_000, signal: ac.signal });
+    const pid = await childPid();
+    const acQueued = new AbortController();
+    const queued = execute({ args: ["-p", "y"], timeoutMs: 10_000, signal: acQueued.signal });
+    await sleep(100);
+    const aborted = Date.now();
+    acQueued.abort();
+    await assert.rejects(queued, CursorAbortError);
+    assert.ok(Date.now() - aborted < 200, "no grace period: nothing was spawned for it");
+    assert.ok(alive(pid), "the running child is unaffected");
+    assert.equal(Number(await readFile(pidFile, "utf8")), pid, "the queued call never spawned");
+    ac.abort();
+    await assert.rejects(running, CursorAbortError);
+  },
+);
 
-test("a helper that ignores SIGTERM is SIGKILLed at the deadline even though the leader obeyed SIGTERM", async () => {
-  await fresh();
-  await withFake(["FAKE_GRANDCHILD", "FAKE_STUBBORN_HELPER", "FAKE_OBEYS_TERM"], () =>
-    assertHelperKilledAtDeadline("the helper survived SIGTERM (the leader did not)"),
-  );
-});
+test(
+  "a leader that exits while a helper holds the pipes: the call settles with its output after the grace, the helper is killed",
+  { skip: FAKE_AGENT_SKIP },
+  async () => {
+    await fresh();
+    const helperPid = await withFake(["FAKE_GRANDCHILD", "FAKE_EXITS_AT_ONCE"], async () => {
+      const started = Date.now();
+      const result = await execute({ args: ["-p", "x"], timeoutMs: 10_000, parseJson: false });
+      const helperPid = await helperPidOf();
+      assert.equal(result.exitCode, 0);
+      assert.equal(result.stdout, "done", "what the leader wrote before it exited");
+      assert.ok(Date.now() - started < 5_000, "settled without the helper's 30 s");
+      return helperPid;
+    });
+    await sleep(100);
+    assert.ok(!alive(helperPid), "the helper was signalled with the group");
+  },
+);
 
-test("the server's own SIGTERM ends every running cursor-agent group", async () => {
+test(
+  "a helper that ignores SIGTERM is SIGKILLed at the deadline even though the leader obeyed SIGTERM",
+  { skip: FAKE_AGENT_SKIP },
+  async () => {
+    await fresh();
+    await withFake(["FAKE_GRANDCHILD", "FAKE_STUBBORN_HELPER", "FAKE_OBEYS_TERM"], () =>
+      assertHelperKilledAtDeadline("the helper survived SIGTERM (the leader did not)"),
+    );
+  },
+);
+
+test("the server's own SIGTERM ends every running cursor-agent group", { skip: FAKE_AGENT_SKIP }, async () => {
   await fresh();
   const server = spawnServer({ flags: ["FAKE_GRANDCHILD"] });
   const pid = await childPid();
@@ -227,89 +252,117 @@ test("the server's own SIGTERM ends every running cursor-agent group", async () 
   assert.ok(!alive(helperPid), "its helper too");
 });
 
-test("the server's shutdown signals SIGTERM first: an agent that exits on SIGTERM sees it", async () => {
-  await fresh();
-  const server = spawnServer({ flags: ["FAKE_TERM_MARK"], graceMs: 2000 });
-  await childPid();
-  server.kill("SIGTERM");
-  await new Promise((r) => server.once("exit", r));
-  assert.equal(await termMark(), "TERM", "the agent saw SIGTERM");
-});
+test(
+  "the server's shutdown signals SIGTERM first: an agent that exits on SIGTERM sees it",
+  { skip: FAKE_AGENT_SKIP },
+  async () => {
+    await fresh();
+    const server = spawnServer({ flags: ["FAKE_TERM_MARK"], graceMs: 2000 });
+    await childPid();
+    server.kill("SIGTERM");
+    await new Promise((r) => server.once("exit", r));
+    assert.equal(await termMark(), "TERM", "the agent saw SIGTERM");
+  },
+);
 
-test("an exit the server cannot delay SIGKILLs every group: an agent that would exit on SIGTERM never sees one", async () => {
-  await fresh();
-  const server = spawnServer({ flags: ["FAKE_TERM_MARK"], graceMs: 2000, exitAfterMs: 700 });
-  const pid = await childPid();
-  await new Promise((r) => server.once("exit", r));
-  await sleep(200);
-  assert.ok(!alive(pid), "the agent did not outlive the server");
-  assert.equal(await termMark(), "none", "SIGKILL, never SIGTERM, on an exit");
-});
+test(
+  "an exit the server cannot delay SIGKILLs every group: an agent that would exit on SIGTERM never sees one",
+  { skip: FAKE_AGENT_SKIP },
+  async () => {
+    await fresh();
+    const server = spawnServer({ flags: ["FAKE_TERM_MARK"], graceMs: 2000, exitAfterMs: 700 });
+    const pid = await childPid();
+    await new Promise((r) => server.once("exit", r));
+    await sleep(200);
+    assert.ok(!alive(pid), "the agent did not outlive the server");
+    assert.equal(await termMark(), "none", "SIGKILL, never SIGTERM, on an exit");
+  },
+);
 
-test("the server's shutdown reaches a helper whose leader already exited (the group outlives its leader)", async () => {
-  await fresh();
-  const server = spawnServer({
-    call: { parseJson: false },
-    flags: ["FAKE_GRANDCHILD", "FAKE_STUBBORN_HELPER", "FAKE_EXITS_AT_ONCE"],
-    graceMs: 2000,
-  });
-  const pid = await childPid();
-  const helperPid = await helperPidOf();
-  await sleep(300); // the leader has exited, the helper's node is up and ignores SIGTERM
-  assert.ok(!alive(pid), "the leader exited");
-  assert.ok(alive(helperPid), "the helper lives on");
-  server.kill("SIGTERM");
-  await new Promise((r) => server.once("exit", r));
-  await sleep(200);
-  assert.ok(!alive(helperPid), "the helper was SIGKILLed by the server's shutdown");
-});
+test(
+  "the server's shutdown reaches a helper whose leader already exited (the group outlives its leader)",
+  { skip: FAKE_AGENT_SKIP },
+  async () => {
+    await fresh();
+    const server = spawnServer({
+      call: { parseJson: false },
+      flags: ["FAKE_GRANDCHILD", "FAKE_STUBBORN_HELPER", "FAKE_EXITS_AT_ONCE"],
+      graceMs: 2000,
+    });
+    const pid = await childPid();
+    const helperPid = await helperPidOf();
+    await sleep(300); // the leader has exited, the helper's node is up and ignores SIGTERM
+    assert.ok(!alive(pid), "the leader exited");
+    assert.ok(alive(helperPid), "the helper lives on");
+    server.kill("SIGTERM");
+    await new Promise((r) => server.once("exit", r));
+    await sleep(200);
+    assert.ok(!alive(helperPid), "the helper was SIGKILLed by the server's shutdown");
+  },
+);
 
-test("a stubborn helper that redirected its stdio (the pipes close with the leader) is still SIGKILLed at the deadline", async () => {
-  await fresh();
-  await withFake(["FAKE_GRANDCHILD", "FAKE_STUBBORN_HELPER", "FAKE_HELPER_NO_PIPES", "FAKE_OBEYS_TERM"], () =>
-    assertHelperKilledAtDeadline("the helper survived SIGTERM and holds no pipe"),
-  );
-});
+test(
+  "a stubborn helper that redirected its stdio (the pipes close with the leader) is still SIGKILLed at the deadline",
+  { skip: FAKE_AGENT_SKIP },
+  async () => {
+    await fresh();
+    await withFake(["FAKE_GRANDCHILD", "FAKE_STUBBORN_HELPER", "FAKE_HELPER_NO_PIPES", "FAKE_OBEYS_TERM"], () =>
+      assertHelperKilledAtDeadline("the helper survived SIGTERM and holds no pipe"),
+    );
+  },
+);
 
-test("a second signal during the shutdown grace ends the server at once, SIGKILL first", async () => {
-  await fresh();
-  const server = spawnServer({
-    call: { parseJson: false },
-    flags: ["FAKE_GRANDCHILD", "FAKE_STUBBORN_HELPER", "FAKE_HELPER_NO_PIPES", "FAKE_EXITS_AT_ONCE"],
-    graceMs: 20000,
-  });
-  await childPid();
-  const helperPid = await helperPidOf();
-  await sleep(300);
-  assert.ok(alive(helperPid));
-  const signalled = Date.now();
-  server.kill("SIGTERM");
-  await sleep(100);
-  server.kill("SIGTERM");
-  await new Promise((r) => server.once("exit", r));
-  assert.ok(Date.now() - signalled < 5_000, "no 20 s grace after the second signal");
-  await sleep(200);
-  assert.ok(!alive(helperPid), "the helper was SIGKILLed before the server ended");
-});
+test(
+  "a second signal during the shutdown grace ends the server at once, SIGKILL first",
+  { skip: FAKE_AGENT_SKIP },
+  async () => {
+    await fresh();
+    const server = spawnServer({
+      call: { parseJson: false },
+      flags: ["FAKE_GRANDCHILD", "FAKE_STUBBORN_HELPER", "FAKE_HELPER_NO_PIPES", "FAKE_EXITS_AT_ONCE"],
+      graceMs: 20000,
+    });
+    await childPid();
+    const helperPid = await helperPidOf();
+    await sleep(300);
+    assert.ok(alive(helperPid));
+    const signalled = Date.now();
+    server.kill("SIGTERM");
+    await sleep(100);
+    server.kill("SIGTERM");
+    await new Promise((r) => server.once("exit", r));
+    assert.ok(Date.now() - signalled < 5_000, "no 20 s grace after the second signal");
+    await sleep(200);
+    assert.ok(!alive(helperPid), "the helper was SIGKILLed before the server ended");
+  },
+);
 
-test("a cancelled call whose group died at once leaves nothing behind: the server's shutdown does not wait the grace", async () => {
-  await fresh();
-  const server = spawnServer({ flags: ["FAKE_OBEYS_TERM"], graceMs: 20000, abortAfterMs: 700 });
-  const pid = await childPid();
-  await sleep(1_000); // the abort happened, the leader obeyed SIGTERM, the group is empty
-  assert.ok(!alive(pid));
-  const signalled = Date.now();
-  server.kill("SIGTERM");
-  await new Promise((r) => server.once("exit", r));
-  assert.ok(Date.now() - signalled < 3_000, "no 20 s grace for an empty group");
-});
+test(
+  "a cancelled call whose group died at once leaves nothing behind: the server's shutdown does not wait the grace",
+  { skip: FAKE_AGENT_SKIP },
+  async () => {
+    await fresh();
+    const server = spawnServer({ flags: ["FAKE_OBEYS_TERM"], graceMs: 20000, abortAfterMs: 700 });
+    const pid = await childPid();
+    await sleep(1_000); // the abort happened, the leader obeyed SIGTERM, the group is empty
+    assert.ok(!alive(pid));
+    const signalled = Date.now();
+    server.kill("SIGTERM");
+    await new Promise((r) => server.once("exit", r));
+    assert.ok(Date.now() - signalled < 3_000, "no 20 s grace for an empty group");
+  },
+);
 
-test("the tool handler passes the request signal on: handleCursorAgent is cancelled through it", async () => {
-  await fresh();
-  const ac = new AbortController();
-  const call = handleCursorAgent({ prompt: "x" }, { signal: ac.signal });
-  await childPid();
-  ac.abort();
-  const result = await call.catch((e) => e);
-  assert.ok(result instanceof CursorAbortError, String(result));
-});
+test(
+  "the tool handler passes the request signal on: handleCursorAgent is cancelled through it",
+  { skip: FAKE_AGENT_SKIP },
+  async () => {
+    await fresh();
+    const ac = new AbortController();
+    const call = handleCursorAgent({ prompt: "x" }, { signal: ac.signal });
+    await childPid();
+    ac.abort();
+    const result = await call.catch((e) => e);
+    assert.ok(result instanceof CursorAbortError, String(result));
+  },
+);

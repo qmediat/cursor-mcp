@@ -6,7 +6,6 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { readFileSync } from "node:fs";
-import { rm } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -134,7 +133,7 @@ test(
       );
     } finally {
       await server.stop();
-      await rm(fake.dir, { recursive: true, force: true });
+      await fake.remove();
     }
   },
 );

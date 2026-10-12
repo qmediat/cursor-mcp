@@ -93,7 +93,8 @@ export function createServer(): McpServer {
   return server;
 }
 
-/** A tool handler whose failure is the tool's error result, never a thrown protocol error: one rule for every tool. */
+/** A tool handler whose thrown failure is the tool's error result, never a protocol error — one rule for every tool (a
+ * handler may still answer a failure it expects, a failed probe, with a result of its own). */
 function guarded<A extends unknown[]>(
   handler: (...args: A) => Promise<CallToolResult>,
 ): (...args: A) => Promise<CallToolResult> {
