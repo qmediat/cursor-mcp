@@ -10,6 +10,8 @@
 - Development only: the cancellation tests set the fake's flags, spawn the test server and check the helper's
   deadline kill through one helper each, so the formatter adopted next adds no repeated block; the 48 duplicate lines
   recorded for `test/cancel.test.mjs` are gone.
+- Development only: a test pins that the server's shutdown sends SIGTERM before SIGKILL (an agent that exits on
+  SIGTERM sees it); until now the deadline SIGKILL alone made every shutdown test pass.
 
 ## [1.2.1] - 2026-10-06
 
