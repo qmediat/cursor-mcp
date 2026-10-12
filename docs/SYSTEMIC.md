@@ -16,9 +16,11 @@ over `src` and `test`; the ratchet holds the lines each file has in a repeat to 
 grew against the base branch (CI checks out with `fetch-depth: 0`).
 
 **Formatting.** Prettier (pinned in `package.json`; `.prettierrc.json`: printWidth 120, its defaults otherwise —
-double quotes, semicolons, trailing commas: the style the code had) formats every `*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}` file (the one glob: the `fmt` script); `npm run format` rewrites, `npm run format:check` is a CI step. Excluded (`.prettierignore`): the vendored
-presets of Rule 1 and whatever ESLint ignores (the same list); `.gitattributes` keeps every text file LF. Prose,
-JSON and YAML are not formatted by it.
+double quotes, semicolons, trailing commas: the style the code had) formats every `*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}`
+file (the one glob: the `fmt` script); `npm run format` rewrites; `npm run lint` starts with `npm run format:check`,
+so CI's lint step checks it. Excluded (`.prettierignore`): the vendored presets of Rule 1 and whatever ESLint ignores
+(the same list); `.gitattributes` keeps every text file LF. Prose, JSON and YAML are not formatted by it.
+`.git-blame-ignore-revs` names the one-time reformat (#33) for `git blame`.
 
 **The exemplars** — read before writing, not the nearest file:
 
@@ -26,8 +28,7 @@ JSON and YAML are not formatted by it.
 |---|---|
 | module | `src/cursor-argv.ts` |
 | test | `test/args.test.mjs` |
-
-There is no shared test helper yet; the first one goes in `test/support/` and is named here.
+| test helper | `test/support/fake-agent.mjs` (the fake `cursor-agent` every suite that runs one uses) |
 
 **Rule 2 — the baselines at adoption.** `eslint-suppressions.json`: 9 violations in 5 files (5 over the complexity of
 10, 4 functions over 40 lines); duplicates: 70 lines in 3 files (3 repeats, both sides counted). A baseline only shrinks: a function a PR changes
@@ -39,6 +40,6 @@ passes while another is fixed in the same PR — the count is the only guard the
 touched functions. `eslint-suppressions.json` is marked `linguist-generated` (a review packet carries it as data,
 last): the ratchet holds it after adoption, and the adoption PR names its counts.
 
-**Enforcement.** The CI job runs `npm run lint` and `npm run format:check` on every Node of its matrix. Named exclusions: the release job does not
-lint (the tag's tree was linted on its pull request and on `main`); the root configuration files are outside jscpd's
-pattern (no logic to repeat).
+**Enforcement.** The CI job runs `npm run lint` (`npm run format:check` first) on every Node of its matrix. Named
+exclusions: the release job does not lint (the tag's tree was linted on its pull request and on `main`); the root
+configuration files are outside jscpd's pattern (no logic to repeat).

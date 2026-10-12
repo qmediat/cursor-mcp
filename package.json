@@ -25,7 +25,7 @@
     "test": "node --test",
     "prepack": "npm run build",
     "start": "node dist/index.js",
-    "lint": "eslint . && jscpd --config .jscpd.json && node lint/baseline-ratchet.mjs --duplicates .jscpd-report/jscpd-report.json",
+    "lint": "npm run -s format:check && eslint . && jscpd --config .jscpd.json && node lint/baseline-ratchet.mjs --duplicates .jscpd-report/jscpd-report.json",
     "fmt": "prettier \"**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}\"",
     "format": "npm run -s fmt -- --write",
     "format:check": "npm run -s fmt -- --check"
