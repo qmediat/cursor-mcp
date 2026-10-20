@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-10-20
+
 ### Changed
 
 - Development only: `npm run lint` checks the structure of the code with a shared preset (ESLint with Babel's
@@ -18,6 +20,9 @@
 - Development only: tests pin that the server's shutdown sends SIGTERM before SIGKILL (an agent that exits on SIGTERM
   sees it) and that an exit the server cannot delay SIGKILLs every group (no SIGTERM, no agent left); until now the
   deadline SIGKILL alone made every shutdown test pass, and the exit path had no test.
+- Runtime dependencies: `@modelcontextprotocol/sdk` 1.32.1 (was 1.32.0) and `zod` 4.6.7 (was 4.6.5).
+- Development only: `@babel/core` and `@babel/eslint-parser` 8.0.7, `jscpd` 5.4.1, `prettier` 3.9.10 (the code's
+  formatting is unchanged), and `actions/setup-node` 7.1.0 in the workflows.
 
 ## [1.2.1] - 2026-10-06
 
