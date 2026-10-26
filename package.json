@@ -60,8 +60,8 @@
     "@babel/eslint-parser": "8.0.7",
     "@eslint-community/eslint-plugin-eslint-comments": "4.8.1",
     "@types/node": "22.20.5",
-    "eslint": "10.12.0",
-    "jscpd": "5.4.1",
+    "eslint": "10.13.0",
+    "jscpd": "5.4.2",
     "prettier": "3.9.10",
     "typescript": "7.0.2"
   },
