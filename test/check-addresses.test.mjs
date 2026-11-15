@@ -14,6 +14,12 @@ import { addressesIn, findingsIn, staleEntries } from "../scripts/check-addresse
 
 const SCRIPT = fileURLToPath(new URL("../scripts/check-addresses.mjs", import.meta.url));
 const FOREIGN = "someone" + "@elsewhere.test";
+/**
+ * An address assembled at run time, so that this file holds none for the repository's own check to find.
+ * @param {string} local
+ * @param {string} domain
+ */
+const addressOf = (local, domain) => `${local}${"@"}${domain}`;
 const ENV = { ...process.env, GIT_CEILING_DIRECTORIES: tmpdir() };
 /** @type {string[]} */
 const made = [];
@@ -83,7 +89,47 @@ test("an npm scope, a version pin and a git remote (scp or ssh form) are not add
     'npx @qmediat.io/cursor-mcp@1.2.3 "@modelcontextprotocol/sdk@1.29.x" zod@3.x',
     "git@github.com:qmediat/x.git",
     "ssh://git@github.com/qmediat/x.git",
+    "git+ssh://git@github.com/qmediat/x.git",
   ].join("\n");
+  assert.deepEqual(addressesIn(text), []);
+  const run = runCheck(makeRepo({ "README.md": text }));
+  assert.equal(run.status, 0, run.stderr);
+});
+
+test("an address followed by a path, a port or a colon is still an address", () => {
+  const alice = addressOf("alice", "gmail.com");
+  const someone = addressOf("someone", "foreign.invalid");
+  const lines = [
+    `https://${alice}/profile`,
+    `see ${alice}/x`,
+    `Contact ${someone}: details`,
+    `${someone}:8080`,
+    `ssh://${addressOf("alice", "gitlab.invalid")}/x.git`,
+    `${addressOf("x.git", "github.invalid")}:owner/repo`,
+  ];
+  const run = runCheck(makeRepo({ "NOTES.md": lines.join("\n") }));
+  assert.equal(run.status, 1);
+  const found = [
+    alice,
+    alice,
+    someone,
+    someone,
+    addressOf("alice", "gitlab.invalid"),
+    addressOf("x.git", "github.invalid"),
+  ];
+  assert.equal(run.stderr, found.map((address, index) => `NOTES.md:${index + 1}: ${address}\n`).join(""));
+});
+
+test("a version pin has only numeric labels before its last: a domain with a name in it is an address", () => {
+  const named = [addressOf("alice", "1.2.gmail.com"), addressOf("someone", "1.263.com")];
+  assert.deepEqual(addressesIn("name@1.0.0-alpha.beta zod@3.x sdk@1.29.x"), []);
+  const run = runCheck(makeRepo({ "NOTES.md": named.join("\n") }));
+  assert.equal(run.status, 1);
+  assert.equal(run.stderr, `NOTES.md:1: ${named[0]}\nNOTES.md:2: ${named[1]}\n`);
+});
+
+test("an image at a pixel scale is not an address", () => {
+  const text = "![logo](logo@2x.png) ![icon](icon@3x.webp)";
   assert.deepEqual(addressesIn(text), []);
   const run = runCheck(makeRepo({ "README.md": text }));
   assert.equal(run.status, 0, run.stderr);

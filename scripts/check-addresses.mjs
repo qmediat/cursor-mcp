@@ -14,12 +14,16 @@ import { fileURLToPath } from "node:url";
 
 import { isProgram } from "./is-program.mjs";
 
-// A local part (letters of any script), "@", and a domain of dot-separated labels ending in letters; not followed by
-// more of a name or by a path (`git@host:owner/repo`, `ssh://git@host/owner/repo`). An npm scope (`@scope/name`) has
-// no local part and never matches.
-const ADDRESS = /[\p{L}\p{N}._%+-]+@((?:[A-Za-z0-9-]+\.)+[A-Za-z]+)(?![\p{L}\p{N}_-]|\.[\p{L}\p{N}]|[/:]\S)/gu;
-// `name@1.2.3`, `name@1.50.x`: a package pinned to a version, not an address.
-const VERSION_PIN = /^\d+(?:\.(?:\d+|x))+$/i;
+// A local part (letters of any script), "@", and a domain of dot-separated labels ending in letters, not followed by
+// more of a name. A path or a port after it does not change that: `https://alice@host/x` and `alice@host:8080` are
+// addresses. An npm scope (`@scope/name`) has no local part and never matches.
+const ADDRESS = /([\p{L}\p{N}._%+-]+)@((?:[A-Za-z0-9-]+\.)+[A-Za-z]+)(?![\p{L}\p{N}_-]|\.[\p{L}\p{N}])/gu;
+// `name@1.50.x`, `name@1.0.0-alpha.beta`: a package pinned to a version — numeric labels, then `.x` or a prerelease.
+const VERSION_PIN = /^\d+(?:\.\d+)*(?:\.x|-[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)$/i;
+// `logo@2x.png`, `icon@3x.webp`: an image at a pixel scale.
+const IMAGE_SCALE = /^\d+x\./i;
+// `git@host:owner/repo`: a git remote in scp form (a colon, then the path).
+const SCP_PATH = /^:\S/;
 const ALLOWED_DOMAINS = new Set([
   "qmediat.io",
   "users.noreply.github.com",
@@ -45,6 +49,28 @@ const OWN_ROOT = fileURLToPath(new URL("..", import.meta.url));
 /** @typedef {{ kind: "text", text: string } | { kind: "skipped" } | { kind: "unreadable", reason: string }} FileText */
 
 /**
+ * @param {RegExpMatchArray} match an ADDRESS match in `lineText`
+ * @param {string} lineText
+ * @returns {boolean} whether it is a git remote: local part `git`, in scp form or after `ssh://` (`git+ssh://`)
+ */
+function isGitRemote(match, lineText) {
+  if (match[1] !== "git") return false;
+  const start = match.index ?? 0;
+  const after = lineText.slice(start + match[0].length);
+  return lineText.slice(0, start).endsWith("ssh://") || SCP_PATH.test(after);
+}
+
+/**
+ * @param {RegExpMatchArray} match an ADDRESS match in `lineText`
+ * @param {string} lineText
+ * @returns {boolean} whether it names a mailbox: not a version pin, an image scale or a git remote
+ */
+function isAddress(match, lineText) {
+  const domain = match[2] ?? "";
+  return !VERSION_PIN.test(domain) && !IMAGE_SCALE.test(domain) && !isGitRemote(match, lineText);
+}
+
+/**
  * @param {string} text a file's text
  * @returns {Address[]} every address in it, with its 1-based line
  */
@@ -53,7 +79,7 @@ export function addressesIn(text) {
     .split("\n")
     .flatMap((lineText, index) =>
       [...lineText.matchAll(ADDRESS)]
-        .filter((match) => !VERSION_PIN.test(match[1] ?? ""))
+        .filter((match) => isAddress(match, lineText))
         .map((match) => ({ line: index + 1, address: match[0] })),
     );
 }
