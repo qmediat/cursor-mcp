@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.2.3] - 2026-11-15
+
 ### Changed
 
 - Documentation: the README is one screen for a person (install, try it, the tools, what it supports, where to read
@@ -11,6 +13,13 @@
 - Development only: the README's `## Supports · version X.Y.Z` names the package version; `npm run check:supports`
   (`scripts/check-supports.mjs`, run by `npm run lint` and by the release workflow before publishing) fails when they
   differ or the heading is missing.
+
+### Development
+
+- The repository's lockfile: `npm audit fix` — `qs` 6.17.1 (was 6.16.0,
+  [GHSA-6pq8-jhm2-2vcw](https://github.com/advisories/GHSA-6pq8-jhm2-2vcw)) and five moderate advisories; `npm audit`
+  on the repository reports none. `package-lock.json` is not part of the published package and the dependency ranges
+  in `package.json` are unchanged, so an install resolves its own tree as before.
 
 ## [1.2.2] - 2026-10-20
 

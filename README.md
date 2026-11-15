@@ -34,7 +34,7 @@ Use cursor_agent to add input validation to src/form.ts
 | `cursor_sessions` | Sessions of this server |
 | `cursor_health` | Installation and login check |
 
-## Supports · version 1.2.2
+## Supports · version 1.2.3
 
 | | |
 |---|---|
