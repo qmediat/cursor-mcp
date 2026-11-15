@@ -1,20 +1,23 @@
 #!/usr/bin/env node
 // @ts-check
 // Every email address in a tracked text file is in qmediat.io, or on the short list of addresses that are not anyone's
-// mailbox (GitHub's noreply domain, the reserved example domains, a commit trailer, this repository's fixtures). Exits
-// 1 with one line per other address, `path:line: address`, and 2 with one line when git cannot list the tracked files.
-// Scans the repository given as the first argument (default: the repository holding this script). Binary files (a NUL
-// in the first 8000 bytes, git's own test) and package-lock.json are not read.
-import { lstatSync, readFileSync } from "node:fs";
+// mailbox (GitHub's noreply domain, the reserved example domains, a commit trailer, this repository's fixtures — each
+// allowed only in its own file). Exits 1 with one line per other address, `path:line: address`, and per allowlist
+// entry whose file no longer holds its address; 2 ("cannot tell") with one line when git cannot list the tracked files
+// and one per tracked file that cannot be read — a symlink is read when it resolves to a regular file inside the
+// repository. Scans the repository given as the first argument (default: the repository holding this script). Binary
+// files (a NUL in the first 8192 bytes, git's own test) and package-lock.json are not scanned.
+import { closeSync, lstatSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { basename, join } from "node:path";
+import { basename, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { isProgram } from "./is-program.mjs";
 
-// A local part, "@", and a domain of dot-separated labels ending in letters; not followed by more of a name or by
-// ":path" (a `git@host:owner/repo` remote). An npm scope (`@scope/name`) has no local part and never matches.
-const ADDRESS = /[A-Za-z0-9._%+-]+@((?:[A-Za-z0-9-]+\.)+[A-Za-z]+)(?![\w-]|\.\w|:[\w/~])/g;
+// A local part (letters of any script), "@", and a domain of dot-separated labels ending in letters; not followed by
+// more of a name or by a path (`git@host:owner/repo`, `ssh://git@host/owner/repo`). An npm scope (`@scope/name`) has
+// no local part and never matches.
+const ADDRESS = /[\p{L}\p{N}._%+-]+@((?:[A-Za-z0-9-]+\.)+[A-Za-z]+)(?![\p{L}\p{N}_-]|\.[\p{L}\p{N}]|[/:]\S)/gu;
 // `name@1.2.3`, `name@1.50.x`: a package pinned to a version, not an address.
 const VERSION_PIN = /^\d+(?:\.(?:\d+|x))+$/i;
 const ALLOWED_DOMAINS = new Set([
@@ -24,14 +27,22 @@ const ALLOWED_DOMAINS = new Set([
   "example.org",
   "example.net",
 ]);
-/** Addresses this repository's own fixtures need, each named with the file that holds it. */
-const REPOSITORY_ADDRESSES = /** @type {string[]} */ ([]);
-const ALLOWED_ADDRESSES = new Set(["noreply@anthropic.com", ...REPOSITORY_ADDRESSES]);
+const ALLOWED_ADDRESSES = new Set(["noreply@anthropic.com"]);
+/**
+ * Addresses this repository's own files need, each allowed only in the file named: none here.
+ * @type {AllowedEntry[]}
+ */
+export const REPOSITORY_ADDRESSES = [];
 const SKIPPED_FILES = new Set(["package-lock.json"]);
-const BINARY_PROBE_BYTES = 8000;
+// The file that lists the repository's entries names their addresses too.
+const SELF = "scripts/check-addresses.mjs";
+const BINARY_PROBE_BYTES = 8192;
+const OWN_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
+/** @typedef {{ file: string, address: string }} AllowedEntry */
 /** @typedef {{ line: number, address: string }} Address */
 /** @typedef {{ ok: true, files: string[] } | { ok: false, message: string }} Listing */
+/** @typedef {{ kind: "text", text: string } | { kind: "skipped" } | { kind: "unreadable", reason: string }} FileText */
 
 /**
  * @param {string} text a file's text
@@ -49,23 +60,39 @@ export function addressesIn(text) {
 
 /**
  * @param {string} address
- * @returns {boolean} whether the address is in qmediat.io or on the allowed list
+ * @param {string} file the tracked path the address was found in
+ * @param {AllowedEntry[]} [entries] the repository's own allowed addresses
+ * @returns {boolean} whether the address is in qmediat.io, on the allowed list, or allowed in this file (an entry's
+ *   own file, or this script, which lists it)
  */
-export function isAllowed(address) {
+export function isAllowed(address, file, entries = REPOSITORY_ADDRESSES) {
   const lower = address.toLowerCase();
   const domain = lower.slice(lower.lastIndexOf("@") + 1);
-  return ALLOWED_DOMAINS.has(domain) || ALLOWED_ADDRESSES.has(lower);
+  if (ALLOWED_DOMAINS.has(domain) || ALLOWED_ADDRESSES.has(lower)) return true;
+  return entries.some((entry) => (entry.file === file || file === SELF) && entry.address.toLowerCase() === lower);
 }
 
 /**
  * @param {string} path the file's path, as the finding names it
  * @param {string} text the file's text
+ * @param {AllowedEntry[]} [entries] the repository's own allowed addresses
  * @returns {string[]} one `path:line: address` line per address that is not allowed
  */
-export function findingsIn(path, text) {
+export function findingsIn(path, text, entries = REPOSITORY_ADDRESSES) {
   return addressesIn(text)
-    .filter(({ address }) => !isAllowed(address))
+    .filter(({ address }) => !isAllowed(address, path, entries))
     .map(({ line, address }) => `${path}:${line}: ${address}`);
+}
+
+/**
+ * @param {AllowedEntry[]} entries the repository's own allowed addresses
+ * @param {(file: string) => string | undefined} textOf a tracked file's text, or undefined when it has none
+ * @returns {string[]} one line per entry whose file no longer holds its address
+ */
+export function staleEntries(entries, textOf) {
+  return entries
+    .filter((entry) => !(textOf(entry.file) ?? "").includes(entry.address))
+    .map((entry) => `check-addresses: ${entry.file} no longer holds ${entry.address}: remove its allowlist entry`);
 }
 
 /**
@@ -76,23 +103,99 @@ export function trackedFiles(root) {
   const run = spawnSync("git", ["ls-files", "-z"], { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
   if (run.error) return { ok: false, message: `check-addresses: git cannot run: ${run.error.message}` };
   if (run.status !== 0) {
-    const reason = run.stderr.trim().split("\n")[0] ?? `exit ${run.status}`;
+    const reason = run.stderr.split("\n")[0]?.trim() || `exit ${run.status}`;
     return { ok: false, message: `check-addresses: git cannot list the files of ${root}: ${reason}` };
   }
   return { ok: true, files: run.stdout.split("\0").filter(Boolean) };
 }
 
 /**
- * @param {string} path the file on disk
- * @returns {string | undefined} its text, or undefined for a binary file, a skipped file or one not in the work tree
+ * @param {unknown} error
+ * @returns {string} the error's code (EACCES, ENOENT …), else its message
  */
-function readText(path) {
-  if (SKIPPED_FILES.has(basename(path))) return undefined;
-  const stat = lstatSync(path, { throwIfNoEntry: false });
-  if (!stat?.isFile()) return undefined;
-  const bytes = readFileSync(path);
-  if (bytes.subarray(0, BINARY_PROBE_BYTES).includes(0)) return undefined;
-  return bytes.toString("utf8");
+function reasonOf(error) {
+  if (error instanceof Error && "code" in error && typeof error.code === "string") return error.code;
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * @param {string} path a regular file
+ * @returns {FileText} its text, or skipped when its first bytes hold a NUL (only those bytes are read then)
+ */
+function readRegular(path) {
+  const probe = Buffer.alloc(BINARY_PROBE_BYTES);
+  const fd = openSync(path, "r");
+  try {
+    const length = readSync(fd, probe, 0, BINARY_PROBE_BYTES, 0);
+    if (probe.subarray(0, length).includes(0)) return { kind: "skipped" };
+  } finally {
+    closeSync(fd);
+  }
+  return { kind: "text", text: readFileSync(path, "utf8") };
+}
+
+/**
+ * @param {string} root the repository
+ * @param {string} path a symlink inside it
+ * @returns {FileText} its target's text when the target is a regular file inside the repository, else unreadable
+ */
+function readSymlink(root, path) {
+  try {
+    const target = realpathSync(path);
+    const inside = relative(realpathSync(root), target);
+    if (inside.startsWith("..") || isAbsolute(inside) || !statSync(target).isFile()) {
+      return { kind: "unreadable", reason: "not a file inside the repository (symlink)" };
+    }
+    return readRegular(target);
+  } catch (error) {
+    return { kind: "unreadable", reason: `${reasonOf(error)} (symlink)` };
+  }
+}
+
+/**
+ * @param {string} root the repository
+ * @param {string} file a tracked path
+ * @returns {FileText} its text; skipped for package-lock.json, a binary file or a directory (a submodule)
+ */
+export function readTracked(root, file) {
+  if (SKIPPED_FILES.has(basename(file))) return { kind: "skipped" };
+  const path = join(root, file);
+  try {
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) return readSymlink(root, path);
+    return stat.isFile() ? readRegular(path) : { kind: "skipped" };
+  } catch (error) {
+    return { kind: "unreadable", reason: reasonOf(error) };
+  }
+}
+
+/**
+ * @param {string} root a repository
+ * @returns {AllowedEntry[]} this repository's entries when root is the repository holding this script; none elsewhere
+ */
+function entriesFor(root) {
+  return realpathSync(root) === realpathSync(OWN_ROOT) ? REPOSITORY_ADDRESSES : [];
+}
+
+/**
+ * @param {string} root the repository
+ * @param {string[]} files its tracked paths
+ * @returns {{ findings: string[], unreadable: string[] }} the address lines and the files that cannot be read
+ */
+export function scan(root, files) {
+  const entries = entriesFor(root);
+  /** @type {Map<string, string>} */
+  const texts = new Map();
+  /** @type {string[]} */
+  const unreadable = [];
+  for (const file of files) {
+    const read = readTracked(root, file);
+    if (read.kind === "text") texts.set(file, read.text);
+    if (read.kind === "unreadable") unreadable.push(`check-addresses: cannot read ${file}: ${read.reason}`);
+  }
+  const findings = [...texts].flatMap(([file, text]) => findingsIn(file, text, entries));
+  findings.push(...staleEntries(entries, (file) => texts.get(file)));
+  return { findings, unreadable };
 }
 
 /**
@@ -100,17 +203,15 @@ function readText(path) {
  * @returns {number} the exit code
  */
 export function main(argv) {
-  const root = argv[0] ?? fileURLToPath(new URL("..", import.meta.url));
+  const root = argv[0] ?? OWN_ROOT;
   const listing = trackedFiles(root);
   if (!listing.ok) {
     console.error(listing.message);
     return 2;
   }
-  const findings = listing.files.flatMap((file) => {
-    const text = readText(join(root, file));
-    return text === undefined ? [] : findingsIn(file, text);
-  });
-  for (const finding of findings) console.error(finding);
+  const { findings, unreadable } = scan(root, listing.files);
+  for (const line of [...findings, ...unreadable]) console.error(line);
+  if (unreadable.length > 0) return 2;
   if (findings.length > 0) return 1;
   console.log(`check-addresses: every address in the ${listing.files.length} tracked files is allowed`);
   return 0;

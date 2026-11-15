@@ -1,6 +1,6 @@
 // @ts-check
 // The guard the repository's scripts share: run `main` only when node started the script itself, not when a test
-// imports it.
+// imports it. lint/baseline-ratchet.mjs keeps its own copy: it is vendored byte for byte across repositories.
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
