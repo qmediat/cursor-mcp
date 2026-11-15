@@ -75,6 +75,22 @@
         "first(at)foreign.test",
         "second(at)foreign.test"
       ]
+    },
+    {
+      "line": "root(at)my_server.corp.test",
+      "address": "root(at)my_server.corp.test"
+    },
+    {
+      "line": "see someone(at)foreign.test_ here",
+      "address": "someone(at)foreign.test"
+    },
+    {
+      "line": "see someone(at)foreign.test- here",
+      "address": "someone(at)foreign.test"
+    },
+    {
+      "line": "(_someone(at)foreign.test_)",
+      "address": "_someone(at)foreign.test"
     }
   ],
   "clean": [

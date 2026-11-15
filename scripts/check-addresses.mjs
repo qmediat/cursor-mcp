@@ -21,9 +21,11 @@ import { fileURLToPath } from "node:url";
 
 import { isProgram } from "./is-program.mjs";
 
-// A local part of letters, digits and ._%+-, an at-sign, and a domain of dot-separated labels whose last label has two
-// or more letters, not followed by more of a name. The same pattern as the Python check in ai-cost.
-const ADDRESS = /[\p{L}\p{N}._%+-]+@(?:[\p{L}\p{N}-]+\.)+\p{L}{2,}(?![\p{L}\p{N}_-]|\.[\p{L}\p{N}])/gu;
+// An address is a local part of letters, digits and _.%+-, an at-sign, and dot-separated labels of letters, digits, _
+// and - whose last label has two or more letters; it never starts inside a longer local part and ends where no letter or
+// digit (nor a dot and one) follows, so a trailing _ or - ends it. The same pattern as the Python check in ai-cost.
+const ADDRESS =
+  /(?<![\p{L}\p{N}_.%+-])[\p{L}\p{N}_.%+-]+@(?:[\p{L}\p{N}_-]+\.)+\p{L}{2,}(?![\p{L}\p{N}])(?!\.[\p{L}\p{N}])/gu;
 const ALLOWED_DOMAINS = ["qmediat.io", "users.noreply.github.com", "example.com", "example.org", "example.net"];
 const ALLOWED_ADDRESSES = new Set(["noreply@anthropic.com"]);
 /**
