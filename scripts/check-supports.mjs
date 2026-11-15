@@ -1,16 +1,23 @@
 #!/usr/bin/env node
 // @ts-check
-// The README's "## Supports · version X.Y.Z" heading names the package version: exits 1 with one line naming both
-// when they differ or the heading is missing, and with one line naming the file when README.md or package.json
-// cannot be read. Reads both in the directory given as the first argument (default: the current directory, the
-// package root under `npm run`).
-import { readFileSync, realpathSync } from "node:fs";
-import { join, resolve } from "node:path";
+// Every file that carries the package version names package.json's: the README's "## Supports · version X.Y.Z"
+// heading, server.json's `version` and every `packages[].version`, package-lock.json's `version` and
+// `packages[""].version` (both files are required; a lockfile without a `packages` map carries only its root
+// `version`). Exits 1 with one line per mismatch naming the file, the value found and package.json's version, or per
+// version file that is missing, and with one line naming the directory when README.md,
+// package.json or a version file cannot be read. Reads them in the directory given as the first argument (default: the
+// current directory, the package root under `npm run`).
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { isProgram } from "./is-program.mjs";
 
 const HEADING = /^## Supports · version (\S+)[ \t]*$/m;
 
 /** @typedef {{ ok: true, version: string } | { ok: false, message: string }} Verdict */
+/** @typedef {{ file: string, field: string, value: unknown }} VersionField */
+/** @typedef {{ ok: true, fields: VersionField[] } | { ok: false, problem: string }} VersionFields */
 
 /**
  * @param {string} readme the README text
@@ -32,17 +39,112 @@ export function checkSupports(readme, packageVersion) {
 }
 
 /**
+ * server.json's version fields: `version` and every `packages[].version`. The registry manifest is required here.
+ * @param {any} server the parsed server.json, or undefined when the file does not exist
+ * @returns {VersionFields}
+ */
+function serverFields(server) {
+  if (server === undefined) return { ok: false, problem: "server.json is missing" };
+  const packages = server.packages ?? [];
+  if (!Array.isArray(packages)) return { ok: false, problem: "server.json packages is not an array" };
+  /** @type {VersionField[]} */
+  const fields = packages.map((entry, index) => ({
+    file: "server.json",
+    field: `packages[${index}].version`,
+    value: entry?.version,
+  }));
+  return { ok: true, fields: [{ file: "server.json", field: "version", value: server.version }, ...fields] };
+}
+
+/**
+ * package-lock.json's version fields: the root `version` and, in a lockfile with a `packages` map (lockfileVersion 2
+ * and 3), `packages[""].version`.
+ * @param {any} lock the parsed package-lock.json, or undefined when the file does not exist
+ * @returns {VersionFields}
+ */
+function lockFields(lock) {
+  if (lock === undefined) return { ok: false, problem: "package-lock.json is missing" };
+  /** @type {VersionField} */
+  const root = { file: "package-lock.json", field: "version", value: lock.version };
+  if (lock.packages === undefined) return { ok: true, fields: [root] };
+  return {
+    ok: true,
+    fields: [root, { file: "package-lock.json", field: 'packages[""].version', value: lock.packages?.[""]?.version }],
+  };
+}
+
+/**
+ * @param {VersionField[]} fields
+ * @param {string} packageVersion the version in package.json
+ * @returns {string[]} one line per field that names another version
+ */
+export function versionMismatches(fields, packageVersion) {
+  return fields
+    .filter((field) => field.value !== packageVersion)
+    .map((field) => `${field.file} ${field.field} is ${shown(field.value)}; package.json is ${packageVersion}`);
+}
+
+/**
+ * @param {unknown} value a version field's value
+ * @returns {string} the value as a line shows it
+ */
+function shown(value) {
+  if (value === undefined) return "missing";
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+/**
+ * @param {string} path
+ * @returns {any} the parsed JSON file, or undefined when it does not exist
+ */
+function readJsonIfPresent(path) {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+    throw new Error(`${path}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/**
+ * @param {string} dir the directory holding server.json and package-lock.json
+ * @param {string} packageVersion the version in package.json
+ * @returns {string[]} one line per version field of those files that names another version, or per file that cannot
+ *   carry one (missing, or `packages` not an array)
+ */
+export function versionFileMismatches(dir, packageVersion) {
+  const found = [
+    serverFields(readJsonIfPresent(join(dir, "server.json"))),
+    lockFields(readJsonIfPresent(join(dir, "package-lock.json"))),
+  ];
+  return found.flatMap((files) => (files.ok ? versionMismatches(files.fields, packageVersion) : [files.problem]));
+}
+
+/**
+ * @param {Verdict} readme the README's verdict
+ * @param {string[]} mismatches the version files'
+ * @returns {Verdict} the README's verdict when no version file differs; otherwise a failure, one line per mismatch
+ */
+function withMismatches(readme, mismatches) {
+  const lines = readme.ok ? mismatches : [readme.message, ...mismatches];
+  return lines.length === 0 ? readme : { ok: false, message: lines.join("\n") };
+}
+
+/**
  * @param {string} root the package directory
  * @returns {Verdict}
  */
 export function checkPackage(root) {
   try {
     const readme = readFileSync(join(root, "README.md"), "utf8");
-    const { version } = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-    return checkSupports(readme, String(version));
+    const version = String(JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version);
+    return withMismatches(checkSupports(readme, version), versionFileMismatches(root, version));
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    return { ok: false, message: `check-supports: README.md or package.json in ${root} cannot be read: ${reason}` };
+    return {
+      ok: false,
+      message: `check-supports: README.md, package.json or a version file in ${root} cannot be read: ${reason}`,
+    };
   }
 }
 
@@ -56,19 +158,8 @@ export function main(argv) {
     console.error(verdict.message);
     return 1;
   }
-  console.log(`README.md "Supports" names version ${verdict.version}, as package.json does`);
+  console.log(`README.md "Supports" and the version files name version ${verdict.version}, as package.json does`);
   return 0;
 }
 
-/** @returns {boolean} whether this file is the program node runs (not a module another file imports) */
-function isProgram() {
-  const self = fileURLToPath(import.meta.url);
-  const started = process.argv[1] ?? "";
-  try {
-    return Boolean(started) && realpathSync(started) === realpathSync(self);
-  } catch {
-    return resolve(started) === self; // a path realpath cannot resolve still names this file when node started it
-  }
-}
-
-if (isProgram()) process.exitCode = main(process.argv.slice(2));
+if (isProgram(import.meta.url)) process.exitCode = main(process.argv.slice(2));

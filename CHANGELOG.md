@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Development only: `npm run check:supports` compares `server.json` (`version` and every `packages[].version`) and the
+  root of `package-lock.json` (`version`, and `packages[""].version` where the lockfile has that map) with
+  `package.json` too, beside the README heading, and prints every mismatch; both files are required. The release
+  workflow runs it instead of its own `server.json` step, which stays only for a tag older than the script.
+  `npm run check:addresses` (`scripts/check-addresses.mjs`, run by `npm run lint` and by the release workflow) fails
+  on an email address outside `qmediat.io` in a tracked text file — a repository's fixture addresses are allowed only
+  in their own file — and exits 2 when a tracked file cannot be read. Nothing in the published package changes.
+
 ## [1.2.3] - 2026-11-15
 
 ### Changed
