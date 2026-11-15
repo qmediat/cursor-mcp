@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Documentation: the README is one screen for a person (install, try it, the tools, what it supports, where to read
+  on); the reference moved to `docs/CONFIGURATION.md`, `docs/TOOLS.md`, `docs/SUPERVISED-CODING.md` and
+  `docs/TRADEMARKS.md` (security stays in `SECURITY.md`, development in `CONTRIBUTING.md`); `AGENTS.md` gives AI
+  agents the commands, the map and the rules (`CLAUDE.md` points to it).
+- Development only: the README's `## Supports · version X.Y.Z` names the package version; `npm run check:supports`
+  (`scripts/check-supports.mjs`, run by `npm run lint` and by the release workflow before publishing) fails when they
+  differ or the heading is missing.
+
 ## [1.2.2] - 2026-10-20
 
 ### Changed

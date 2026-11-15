@@ -75,6 +75,8 @@ jobs:
             exit 1
           fi
 
+      - name: README "Supports" must name this version
+        run: node scripts/check-supports.mjs
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
