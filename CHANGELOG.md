@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.2.3] - 2026-11-15
+
 ### Changed
 
 - Documentation: the README is one screen for a person (install, try it, the tools, what it supports, where to read
@@ -11,6 +13,10 @@
 - Development only: the README's `## Supports · version X.Y.Z` names the package version; `npm run check:supports`
   (`scripts/check-supports.mjs`, run by `npm run lint` and by the release workflow before publishing) fails when they
   differ or the heading is missing.
+
+### Security
+
+- Development and transitive dependencies: `npm audit fix` (lockfile only) — `qs` [GHSA-6pq8-jhm2-2vcw](https://github.com/advisories/GHSA-6pq8-jhm2-2vcw) and five moderate advisories.
 
 ## [1.2.2] - 2026-10-20
 
