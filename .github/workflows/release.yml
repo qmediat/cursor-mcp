@@ -57,15 +57,6 @@ jobs:
             exit 1
           fi
 
-      - name: server.json versions must equal package.json
-        run: |
-          # shellcheck disable=SC2016 # the ${...} are the script's own JavaScript template literals
-          node -e '
-            const s = require("./server.json"); const v = require("./package.json").version;
-            const seen = [s.version, ...(s.packages ?? []).map((p) => p.version)];
-            if (seen.some((x) => x !== v)) { console.error(`server.json versions ${JSON.stringify(seen)} != package.json ${v}`); process.exit(1); }
-            console.log(`server.json versions match ${v}`);
-          '
       - name: CHANGELOG.md must have a section for this version
         run: |
           v="${TAG#v}"
@@ -75,7 +66,7 @@ jobs:
             exit 1
           fi
 
-      - name: README "Supports" must name this version
+      - name: README "Supports", server.json and package-lock.json must name this version
         run: |
           if [ -f scripts/check-supports.mjs ]; then
             node scripts/check-supports.mjs

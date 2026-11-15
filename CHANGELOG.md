@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Development only: `npm run check:supports` compares `server.json` (`version` and every `packages[].version`) and the
+  root of `package-lock.json` with `package.json` too, beside the README heading, and prints every mismatch; the
+  release workflow runs it instead of its own `server.json` step. `npm run check:addresses`
+  (`scripts/check-addresses.mjs`, run by `npm run lint`) fails on an email address outside `qmediat.io` in a tracked
+  text file. Nothing in the published package changes.
+
 ## [1.2.3] - 2026-11-15
 
 ### Changed

@@ -87,8 +87,9 @@ src/
 
 ## Releases
 
-- A release updates the README heading `## Supports · version X.Y.Z` to the new version: `npm run check:supports`
-  (part of `npm run lint`, and a step of the release workflow before anything is published) fails when it differs.
+- A release updates the README heading `## Supports · version X.Y.Z`, `server.json` (`version` and every
+  `packages[].version`) and the root of `package-lock.json` to the new version: `npm run check:supports` (part of
+  `npm run lint`, and a step of the release workflow before anything is published) fails when one of them differs.
 
 ## License
 
