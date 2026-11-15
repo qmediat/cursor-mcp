@@ -31,5 +31,5 @@ Developing needs Node.js 22.18+ or 24.11+ (the lint toolchain); running needs 22
 | Auto-approve | Only from the operator's environment (`CURSOR_ALLOW_YOLO=true`), never a tool parameter |
 | Cancel or timeout | Ends the child and its process group (SIGTERM, then SIGKILL after `CURSOR_KILL_GRACE_MS`) |
 | A user-visible change | One `CHANGELOG.md` entry under `[Unreleased]` |
-| Addresses | Every email address in this repository is in `qmediat.io` (`contact@`, `security@`, `dev@`); commits are authored as `dev@qmediat.io`; no personal or account address, in any file |
+| Addresses | The addresses this repository publishes for the project are in `qmediat.io` (`contact@`, `security@`, `dev@`); the qmediat team's commits are authored as `dev@qmediat.io`, a contributor's with their own address; no personal or account address in any file |
 | A release | README "Supports" updated to the new version; the release check fails when its version differs |
