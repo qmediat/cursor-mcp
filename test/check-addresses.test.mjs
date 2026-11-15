@@ -1,7 +1,7 @@
 // The address check (scripts/check-addresses.mjs) run as `npm run check:addresses` runs it: in a git repository whose
 // tracked text files hold only qmediat.io addresses and the allowed ones it exits 0; any other address exits 1 with one
 // `path:line: address` line; a directory git cannot list or a tracked file that cannot be read exits 2. Each case is a
-// throwaway repository; a foreign address is assembled at run time so that this file holds none.
+// throwaway repository; every foreign address is built at run time by `addressOf`, so that this file holds none.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -13,13 +13,13 @@ import { fileURLToPath } from "node:url";
 import { addressesIn, findingsIn, staleEntries } from "../scripts/check-addresses.mjs";
 
 const SCRIPT = fileURLToPath(new URL("../scripts/check-addresses.mjs", import.meta.url));
-const FOREIGN = "someone" + "@elsewhere.test";
 /**
- * An address assembled at run time, so that this file holds none for the repository's own check to find.
+ * An address built at run time, so that this file holds none for the repository's own check to find.
  * @param {string} local
  * @param {string} domain
  */
 const addressOf = (local, domain) => `${local}${"@"}${domain}`;
+const FOREIGN = addressOf("someone", "elsewhere.test");
 const ENV = { ...process.env, GIT_CEILING_DIRECTORIES: tmpdir() };
 /** @type {string[]} */
 const made = [];
@@ -66,7 +66,7 @@ test("an address in another domain fails with its path and line", () => {
 });
 
 test("an address whose local part has letters outside ASCII fails too", () => {
-  const accented = "Zoë.Łukasz" + "@elsewhere.test";
+  const accented = addressOf("Zoë.Łukasz", "elsewhere.test");
   const run = runCheck(makeRepo({ "NOTES.md": `write to ${accented}\n` }));
   assert.equal(run.status, 1);
   assert.equal(run.stderr, `NOTES.md:1: ${accented}\n`);
@@ -84,12 +84,24 @@ test("qmediat.io and the allowed addresses pass", () => {
   assert.equal(run.status, 0, run.stderr);
 });
 
-test("an npm scope, a version pin and a git remote (scp or ssh form) are not addresses", () => {
+/**
+ * Runs the check on one file of `lines` and asserts that line N reports `found[N]`, and nothing else is reported.
+ * @param {string[]} lines
+ * @param {string[]} found
+ */
+function assertEachFound(lines, found) {
+  const run = runCheck(makeRepo({ "NOTES.md": lines.join("\n") }));
+  assert.equal(run.status, 1);
+  assert.equal(run.stderr, found.map((address, index) => `NOTES.md:${index + 1}: ${address}\n`).join(""));
+}
+
+test("an npm scope, a version pin, an image file name and a git remote are not addresses", () => {
   const text = [
-    'npx @qmediat.io/cursor-mcp@1.2.3 "@modelcontextprotocol/sdk@1.29.x" zod@3.x',
-    "git@github.com:qmediat/x.git",
-    "ssh://git@github.com/qmediat/x.git",
-    "git+ssh://git@github.com/qmediat/x.git",
+    'npx @qmediat.io/cursor-mcp@1.2.3 "@modelcontextprotocol/sdk@1.29.x"',
+    "zod@3.x sdk@1.29.x pkg@1.x.x pkg@1.2.x.x name@1.0.0-alpha.beta",
+    "![logo](logo@2x.png) ![icon](icon@3x.webp)",
+    "git@github.com:owner/repo.git Git@github.com:o/r",
+    "https://git@github.com/o/r ssh://git@github.com/o/r.git git+ssh://git@github.com/o/r.git",
   ].join("\n");
   assert.deepEqual(addressesIn(text), []);
   const run = runCheck(makeRepo({ "README.md": text }));
@@ -99,40 +111,33 @@ test("an npm scope, a version pin and a git remote (scp or ssh form) are not add
 test("an address followed by a path, a port or a colon is still an address", () => {
   const alice = addressOf("alice", "gmail.com");
   const someone = addressOf("someone", "foreign.invalid");
-  const lines = [
-    `https://${alice}/profile`,
-    `see ${alice}/x`,
-    `Contact ${someone}: details`,
-    `${someone}:8080`,
-    `ssh://${addressOf("alice", "gitlab.invalid")}/x.git`,
-    `${addressOf("x.git", "github.invalid")}:owner/repo`,
-  ];
-  const run = runCheck(makeRepo({ "NOTES.md": lines.join("\n") }));
-  assert.equal(run.status, 1);
+  const lines = [`https://${alice}/profile`, `see ${alice}/x`, `Contact ${someone}: details`, `${someone}:8080`];
+  assertEachFound(lines, [alice, alice, someone, someone]);
+});
+
+test("only git, in scp form with a path or after a URL scheme, is a remote; any other git@ or local part is an address", () => {
+  const git = addressOf("git", "github.com");
+  const alice = addressOf("alice", "github.com");
+  const dotted = addressOf("x.git", "github.com");
+  const lines = [`${git}:8080`, `${git}:`, `${git}/qmediat/x.git`, `ssh://${alice}/o/r`, `${dotted}:owner/repo`];
+  assertEachFound(lines, [git, git, git, alice, dotted]);
+});
+
+test("a host whose first label is a pixel scale is an address, not an image", () => {
+  const found = [addressOf("bob", "2x.com"), addressOf("sales", "2x.io"), addressOf("info", "10x.media")];
+  assertEachFound(found, found);
+});
+
+test("a host that only starts like a version is an address, not a version pin", () => {
   const found = [
-    alice,
-    alice,
-    someone,
-    someone,
-    addressOf("alice", "gitlab.invalid"),
-    addressOf("x.git", "github.invalid"),
+    addressOf("bob", "1-pass.com"),
+    addressOf("me", "123-reg.co.uk"),
+    addressOf("info", "2-for-1.com"),
+    addressOf("admin", "1-2.example.com"),
+    addressOf("alice", "1.2.gmail.com"),
+    addressOf("someone", "1.263.com"),
   ];
-  assert.equal(run.stderr, found.map((address, index) => `NOTES.md:${index + 1}: ${address}\n`).join(""));
-});
-
-test("a version pin has only numeric labels before its last: a domain with a name in it is an address", () => {
-  const named = [addressOf("alice", "1.2.gmail.com"), addressOf("someone", "1.263.com")];
-  assert.deepEqual(addressesIn("name@1.0.0-alpha.beta zod@3.x sdk@1.29.x"), []);
-  const run = runCheck(makeRepo({ "NOTES.md": named.join("\n") }));
-  assert.equal(run.status, 1);
-  assert.equal(run.stderr, `NOTES.md:1: ${named[0]}\nNOTES.md:2: ${named[1]}\n`);
-});
-
-test("an image at a pixel scale is not an address", () => {
-  const text = "![logo](logo@2x.png) ![icon](icon@3x.webp)";
-  assert.deepEqual(addressesIn(text), []);
-  const run = runCheck(makeRepo({ "README.md": text }));
-  assert.equal(run.status, 0, run.stderr);
+  assertEachFound(found, found);
 });
 
 test("a binary file and package-lock.json are not read", () => {

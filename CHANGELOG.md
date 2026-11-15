@@ -11,9 +11,9 @@
   `npm run check:addresses` (`scripts/check-addresses.mjs`, run by `npm run lint` and by the release workflow) fails
   on an email address outside `qmediat.io` in a tracked text file — a repository's fixture addresses are allowed only
   in their own file — and exits 2 when a tracked file cannot be read. A path, a port or a colon after an address does
-  not hide it — only a git remote (`git@host:owner/repo`, `ssh://git@host/…`) is exempt — a version pin is one only
-  when its labels before the last are numeric, and an image at a pixel scale (`logo@2x.png`) is not an address.
-  Nothing in the published package changes.
+  not hide it — only a git remote (local part `git`, in scp form with a path or after a URL scheme) is exempt — a
+  version pin is one only when shaped like a version (`3.x`, `1.2.x.x`, `1.0.0-alpha.beta`), and only an image file
+  name at a pixel scale (`logo@2x.png`) is not an address. Nothing in the published package changes.
 
 ## [1.2.3] - 2026-11-15
 

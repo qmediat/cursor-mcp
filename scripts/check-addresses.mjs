@@ -15,15 +15,20 @@ import { fileURLToPath } from "node:url";
 import { isProgram } from "./is-program.mjs";
 
 // A local part (letters of any script), "@", and a domain of dot-separated labels ending in letters, not followed by
-// more of a name. A path or a port after it does not change that: `https://alice@host/x` and `alice@host:8080` are
-// addresses. An npm scope (`@scope/name`) has no local part and never matches.
+// more of a name. A path or a port after it does not change that: `https://alice@example.com/x` and
+// `alice@example.com:8080` are addresses. An npm scope (`@scope/name`) has no local part and never matches.
 const ADDRESS = /([\p{L}\p{N}._%+-]+)@((?:[A-Za-z0-9-]+\.)+[A-Za-z]+)(?![\p{L}\p{N}_-]|\.[\p{L}\p{N}])/gu;
-// `name@1.50.x`, `name@1.0.0-alpha.beta`: a package pinned to a version — numeric labels, then `.x` or a prerelease.
-const VERSION_PIN = /^\d+(?:\.\d+)*(?:\.x|-[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)$/i;
-// `logo@2x.png`, `icon@3x.webp`: an image at a pixel scale.
-const IMAGE_SCALE = /^\d+x\./i;
-// `git@host:owner/repo`: a git remote in scp form (a colon, then the path).
-const SCP_PATH = /^:\S/;
+// A package pinned to a version: numeric or `x` labels ending in `.x` (`zod@3.x`, `pkg@1.2.x.x`), or a three-part
+// numeric core with a prerelease (`name@1.0.0-alpha.beta`); a domain such as `1-pass.com` or `1.263.com` is a host.
+const VERSION_PIN = /^(?:\d+(?:\.(?:\d+|x))*\.x|\d+\.\d+\.\d+-[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)$/i;
+// An image file at a pixel scale, the whole domain being the file name (`logo@2x.png`, `icon@3x.webp`); a domain such
+// as `2x.com` is a host.
+const IMAGE_SCALE = /^\d+x\.(?:png|jpe?g|gif|svg|webp|avif|bmp|ico)$/i;
+// A git remote in scp form: `git@example.com:owner/repo.git`, a colon then a path with a `/` (a port is not one).
+const SCP_PATH = /^:\S*\//;
+// A URL scheme just before the local part: `ssh://`, `git+ssh://`, `https://`. `git@example.com/owner/repo.git`
+// without one is not a form git takes as a remote, so it stays an address.
+const SCHEME_BEFORE = /[A-Za-z][A-Za-z0-9+.-]*:\/\/$/;
 const ALLOWED_DOMAINS = new Set([
   "qmediat.io",
   "users.noreply.github.com",
@@ -49,24 +54,34 @@ const OWN_ROOT = fileURLToPath(new URL("..", import.meta.url));
 /** @typedef {{ kind: "text", text: string } | { kind: "skipped" } | { kind: "unreadable", reason: string }} FileText */
 
 /**
- * @param {RegExpMatchArray} match an ADDRESS match in `lineText`
- * @param {string} lineText
- * @returns {boolean} whether it is a git remote: local part `git`, in scp form or after `ssh://` (`git+ssh://`)
+ * @param {string} address
+ * @returns {string} its domain, lower-cased: what every rule about domains reads
  */
-function isGitRemote(match, lineText) {
-  if (match[1] !== "git") return false;
-  const start = match.index ?? 0;
-  const after = lineText.slice(start + match[0].length);
-  return lineText.slice(0, start).endsWith("ssh://") || SCP_PATH.test(after);
+function domainOf(address) {
+  return address.slice(address.lastIndexOf("@") + 1).toLowerCase();
 }
 
 /**
  * @param {RegExpMatchArray} match an ADDRESS match in `lineText`
  * @param {string} lineText
- * @returns {boolean} whether it names a mailbox: not a version pin, an image scale or a git remote
+ * @returns {boolean} whether it is a git remote: local part `git` (any case), in scp form, or after a URL scheme and
+ *   followed by `/` or `:`
+ */
+function isGitRemote(match, lineText) {
+  if ((match[1] ?? "").toLowerCase() !== "git") return false;
+  const start = match.index ?? 0;
+  const after = lineText.slice(start + match[0].length);
+  if (SCP_PATH.test(after)) return true;
+  return SCHEME_BEFORE.test(lineText.slice(0, start)) && /^[/:]/.test(after);
+}
+
+/**
+ * @param {RegExpMatchArray} match an ADDRESS match in `lineText`
+ * @param {string} lineText
+ * @returns {boolean} whether it names a mailbox: not a version pin, an image file name or a git remote
  */
 function isAddress(match, lineText) {
-  const domain = match[2] ?? "";
+  const domain = domainOf(match[0]);
   return !VERSION_PIN.test(domain) && !IMAGE_SCALE.test(domain) && !isGitRemote(match, lineText);
 }
 
@@ -93,7 +108,7 @@ export function addressesIn(text) {
  */
 export function isAllowed(address, file, entries = REPOSITORY_ADDRESSES) {
   const lower = address.toLowerCase();
-  const domain = lower.slice(lower.lastIndexOf("@") + 1);
+  const domain = domainOf(address);
   if (ALLOWED_DOMAINS.has(domain) || ALLOWED_ADDRESSES.has(lower)) return true;
   return entries.some((entry) => (entry.file === file || file === SELF) && entry.address.toLowerCase() === lower);
 }
