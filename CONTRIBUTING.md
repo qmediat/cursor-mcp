@@ -90,7 +90,10 @@ src/
 - A release updates the README heading `## Supports · version X.Y.Z`, `server.json` (`version` and every
   `packages[].version`) and the root of `package-lock.json` to the new version: `npm run check:supports` (part of
   `npm run lint`, and a step of the release workflow before anything is published) fails when one of them differs or
-  is missing; the release workflow also runs `npm run check:addresses`.
+  is missing; the release workflow also runs `npm run check:addresses`: every address-shaped text in a tracked file is
+  in an allowed domain or its subdomain, or a file that must show other address-shaped text (a git remote with a user,
+  an image name with a scale suffix) adds an exact (file, address) entry to `REPOSITORY_ADDRESSES` in
+  `scripts/check-addresses.mjs`.
 
 ## License
 

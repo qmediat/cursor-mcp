@@ -1,21 +1,81 @@
 {
-  "note": "One corpus for every implementation of the address check (Python in ai-cost, JavaScript in the MCP servers). `(at)` stands for the at-sign so this file holds no address; a test replaces it at run time. `findings`: the line must report exactly `address`. `clean`: the line must report nothing. `allowed`: the line holds an address that is found and allowed.",
+  "note": "One corpus for every implementation of the address check (Python in ai-cost, JavaScript in the MCP servers). `(at)` stands for the at-sign so this file holds no address; a test replaces it at run time. `findings`: the line must report exactly `address` (or, for a line with several, exactly `addresses` in order). `clean`: the line must report nothing. `allowed`: the line holds an address that is found and allowed.",
   "findings": [
-    {"line": "Contact someone(at)foreign.test: details", "address": "someone(at)foreign.test"},
-    {"line": "https://alice(at)mail.test/profile", "address": "alice(at)mail.test"},
-    {"line": "see alice(at)mail.test/x", "address": "alice(at)mail.test"},
-    {"line": "someone(at)foreign.test:8080", "address": "someone(at)foreign.test"},
-    {"line": "git clone git(at)github.com:owner/repo.git", "address": "git(at)github.com"},
-    {"line": "ssh://git(at)github.com/owner/repo.git", "address": "git(at)github.com"},
-    {"line": "![logo](logo(at)2x.png)", "address": "logo(at)2x.png"},
-    {"line": "name(at)1.0.0-alpha.beta", "address": "name(at)1.0.0-alpha.beta"},
-    {"line": "contact(at)2x.com", "address": "contact(at)2x.com"},
-    {"line": "me(at)123-reg.co.uk", "address": "me(at)123-reg.co.uk"},
-    {"line": "alice(at)1.2.mail.test", "address": "alice(at)1.2.mail.test"},
-    {"line": "Zoë.Łukasz(at)elsewhere.test", "address": "Zoë.Łukasz(at)elsewhere.test"},
-    {"line": "jan(at)zażółć.test", "address": "jan(at)zażółć.test"},
-    {"line": "pi(at)raspberrypi.local", "address": "pi(at)raspberrypi.local"},
-    {"line": "<mailto:bob(at)corp.test>", "address": "bob(at)corp.test"}
+    {
+      "line": "Contact someone(at)foreign.test: details",
+      "address": "someone(at)foreign.test"
+    },
+    {
+      "line": "https://alice(at)mail.test/profile",
+      "address": "alice(at)mail.test"
+    },
+    {
+      "line": "see alice(at)mail.test/x",
+      "address": "alice(at)mail.test"
+    },
+    {
+      "line": "someone(at)foreign.test:8080",
+      "address": "someone(at)foreign.test"
+    },
+    {
+      "line": "git clone git(at)github.com:owner/repo.git",
+      "address": "git(at)github.com"
+    },
+    {
+      "line": "ssh://git(at)github.com/owner/repo.git",
+      "address": "git(at)github.com"
+    },
+    {
+      "line": "![logo](logo(at)2x.png)",
+      "address": "logo(at)2x.png"
+    },
+    {
+      "line": "name(at)1.0.0-alpha.beta",
+      "address": "name(at)1.0.0-alpha.beta"
+    },
+    {
+      "line": "contact(at)2x.com",
+      "address": "contact(at)2x.com"
+    },
+    {
+      "line": "me(at)123-reg.co.uk",
+      "address": "me(at)123-reg.co.uk"
+    },
+    {
+      "line": "alice(at)1.2.mail.test",
+      "address": "alice(at)1.2.mail.test"
+    },
+    {
+      "line": "Zoë.Łukasz(at)elsewhere.test",
+      "address": "Zoë.Łukasz(at)elsewhere.test"
+    },
+    {
+      "line": "jan(at)zażółć.test",
+      "address": "jan(at)zażółć.test"
+    },
+    {
+      "line": "pi(at)raspberrypi.local",
+      "address": "pi(at)raspberrypi.local"
+    },
+    {
+      "line": "<mailto:bob(at)corp.test>",
+      "address": "bob(at)corp.test"
+    },
+    {
+      "line": "user(at)notexample.com",
+      "address": "user(at)notexample.com"
+    },
+    {
+      "line": "user(at)example.com.evil.test",
+      "address": "user(at)example.com.evil.test"
+    },
+    {
+      "line": "two on a line: first(at)foreign.test and second(at)foreign.test",
+      "addresses": [
+        "first(at)foreign.test",
+        "second(at)foreign.test"
+      ]
+    }
   ],
   "clean": [
     "sdk(at)1.29.x",
@@ -36,6 +96,8 @@
     "12345+someone(at)users.noreply.github.com",
     "user(at)example.com",
     "user(at)sub.example.org",
-    "noreply(at)anthropic.com"
+    "noreply(at)anthropic.com",
+    "Security(at)QMediat.io",
+    "NoRePly(at)anthropic.com"
   ]
 }

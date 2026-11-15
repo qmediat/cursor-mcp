@@ -1,16 +1,19 @@
 #!/usr/bin/env node
 // @ts-check
-// Every address-shaped text in a tracked file is an address and is reported, unless its domain is (or is a subdomain
-// of) an allowed domain, it is the commit trailer's noreply address, or the exact (file, address) pair is in
-// REPOSITORY_ADDRESSES; nothing is exempt by its shape, so a file that must show a git remote with a user, or any other
-// address-shaped text, adds one entry to REPOSITORY_ADDRESSES. Exits 1 with one `path:line: address` line per finding
-// and per entry whose file no longer holds its address; 2 ("cannot tell") with one line when git cannot list the tracked
-// files and one per tracked file that cannot be read (a symlink is read when it resolves to a regular file inside the
-// repository). Scans the repository given as the first argument (default: the repository holding this script).
+// Every match of the address pattern in a tracked file is an address and is reported, unless its domain is (or is a
+// subdomain of) an allowed domain, it is the commit trailer's noreply address, or the exact (file, address) pair is in
+// REPOSITORY_ADDRESSES (case-insensitive, like every comparison here); nothing is exempt by its shape, so a file that
+// must show a git remote with a user, or any other address-shaped text, adds one entry to REPOSITORY_ADDRESSES. Exits
+// 1 with one `path:line: address` line per finding and per entry whose file no longer holds its address; 2 ("cannot
+// tell") with one line when git cannot list the tracked files and one per tracked file that cannot be read (a symlink
+// is read when it resolves to a regular file inside the repository). Scans the repository given as the first argument
+// (default: the repository holding this script).
 //
-// Not read, by design: an address not written plainly (a quoted local part, a percent- or entity-encoded at-sign, a
-// fullwidth at-sign, an [at] form, an address split across lines), a file with a NUL in its first 8192 bytes,
-// package-lock.json, and what the build writes from tracked source.
+// Not read, by design: a last label of one letter (the pattern needs two or more letters there); an address not
+// written plainly (a percent- or entity-encoded at-sign, a fullwidth at-sign, an [at] form, an address split across
+// lines); a file with a NUL in its first 8192 bytes; package-lock.json; what the build writes from tracked source. An
+// address with a quoted or otherwise unusual local part is reported as its address-shaped tail, and an allowlist entry
+// uses that reported form.
 import { closeSync, lstatSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { basename, isAbsolute, join, relative } from "node:path";
@@ -21,13 +24,7 @@ import { isProgram } from "./is-program.mjs";
 // A local part of letters, digits and ._%+-, an at-sign, and a domain of dot-separated labels whose last label has two
 // or more letters, not followed by more of a name. The same pattern as the Python check in ai-cost.
 const ADDRESS = /[\p{L}\p{N}._%+-]+@(?:[\p{L}\p{N}-]+\.)+\p{L}{2,}(?![\p{L}\p{N}_-]|\.[\p{L}\p{N}])/gu;
-const ALLOWED_DOMAINS = new Set([
-  "qmediat.io",
-  "users.noreply.github.com",
-  "example.com",
-  "example.org",
-  "example.net",
-]);
+const ALLOWED_DOMAINS = ["qmediat.io", "users.noreply.github.com", "example.com", "example.org", "example.net"];
 const ALLOWED_ADDRESSES = new Set(["noreply@anthropic.com"]);
 /**
  * Addresses this repository's own files need, each allowed only in the file named: none here.
@@ -84,7 +81,7 @@ function isWithin(domain, allowed) {
 export function isAllowed(address, file, entries = REPOSITORY_ADDRESSES) {
   const lower = address.toLowerCase();
   const domain = domainOf(address);
-  if (ALLOWED_ADDRESSES.has(lower) || [...ALLOWED_DOMAINS].some((allowed) => isWithin(domain, allowed))) return true;
+  if (ALLOWED_ADDRESSES.has(lower) || ALLOWED_DOMAINS.some((allowed) => isWithin(domain, allowed))) return true;
   return entries.some((entry) => (entry.file === file || file === SELF) && entry.address.toLowerCase() === lower);
 }
 
@@ -103,11 +100,11 @@ export function findingsIn(path, text, entries = REPOSITORY_ADDRESSES) {
 /**
  * @param {AllowedEntry[]} entries the repository's own allowed addresses
  * @param {(file: string) => string | undefined} textOf a tracked file's text, or undefined when it has none
- * @returns {string[]} one line per entry whose file no longer holds its address
+ * @returns {string[]} one line per entry whose file no longer holds its address, in any case
  */
 export function staleEntries(entries, textOf) {
   return entries
-    .filter((entry) => !(textOf(entry.file) ?? "").includes(entry.address))
+    .filter((entry) => !(textOf(entry.file) ?? "").toLowerCase().includes(entry.address.toLowerCase()))
     .map((entry) => `check-addresses: ${entry.file} no longer holds ${entry.address}: remove its allowlist entry`);
 }
 

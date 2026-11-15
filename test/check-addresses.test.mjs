@@ -1,8 +1,9 @@
 // The address check (scripts/check-addresses.mjs) run as `npm run check:addresses` runs it: in a git repository whose
 // tracked text files hold only qmediat.io addresses and the allowed ones it exits 0; any other address exits 1 with one
 // `path:line: address` line; a directory git cannot list or a tracked file that cannot be read exits 2. Each case is a
-// throwaway repository. The shared corpus (test/fixtures/address-corpus.json) holds the pattern's cases; every other
-// test address is built at run time by `addressOf`, so that this file holds none.
+// throwaway repository. The shared corpus (test/fixtures/address-corpus.json) holds the pattern's cases; every test
+// address, there and here, is written with `(at)` for the at-sign and made an address by `withAtSign` at run time, so
+// this file holds none.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -11,23 +12,18 @@ import { join } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { addressesIn, findingsIn, staleEntries } from "../scripts/check-addresses.mjs";
+import { addressesIn, findingsIn, isAllowed, staleEntries } from "../scripts/check-addresses.mjs";
 
 const SCRIPT = fileURLToPath(new URL("../scripts/check-addresses.mjs", import.meta.url));
 /**
- * Every test address is built here at run time, so that this file holds none for the repository's own check to find.
- * @param {string} local
- * @param {string} domain
- */
-const addressOf = (local, domain) => `${local}${"@"}${domain}`;
-const FOREIGN = addressOf("someone", "elsewhere.test");
-/**
  * The corpus every implementation of the check shares; `(at)` stands for the at-sign, so the file holds no address.
- * @type {{ findings: { line: string, address: string }[], clean: string[], allowed: string[] }}
+ * A finding names its one `address`, or `addresses` in order for a line with several.
+ * @type {{ findings: { line: string, address?: string, addresses?: string[] }[], clean: string[], allowed: string[] }}
  */
 const CORPUS = JSON.parse(readFileSync(new URL("./fixtures/address-corpus.json", import.meta.url), "utf8"));
-/** @param {string} text */
+/** @param {string} text written with `(at)` for the at-sign @returns {string} the text with the at-sign */
 const withAtSign = (text) => text.replaceAll("(at)", "@");
+const FOREIGN = withAtSign("someone(at)elsewhere.test");
 const ENV = { ...process.env, GIT_CEILING_DIRECTORIES: tmpdir() };
 /** @type {string[]} */
 const made = [];
@@ -74,29 +70,30 @@ test("an address in another domain fails with its path and line", () => {
 });
 
 /**
- * Runs the check on one file of `lines` and asserts that line N reports `found[N]`, and nothing else is reported.
+ * Runs the check on one file of `lines` and asserts that line N reports `found[N]`, in order, and nothing else.
  * @param {string[]} lines
- * @param {string[]} found
+ * @param {string[][]} found the addresses each line holds
  */
 function assertEachFound(lines, found) {
   const run = runCheck(makeRepo({ "NOTES.md": lines.join("\n") }));
   assert.equal(run.status, 1);
-  assert.equal(run.stderr, found.map((address, index) => `NOTES.md:${index + 1}: ${address}\n`).join(""));
+  const expected = found.flatMap((addresses, index) =>
+    addresses.map((address) => `NOTES.md:${index + 1}: ${address}\n`),
+  );
+  assert.equal(run.stderr, expected.join(""));
 }
 
-test("every corpus finding is reported as exactly its address, with its path and line", () => {
-  const found = CORPUS.findings.map(({ address }) => withAtSign(address));
-  for (const [index, { line }] of CORPUS.findings.entries()) {
+test("every corpus finding is reported as exactly its addresses, with its path and line", () => {
+  const lines = CORPUS.findings.map(({ line }) => withAtSign(line));
+  const found = CORPUS.findings.map(({ address, addresses }) => (addresses ?? [address ?? ""]).map(withAtSign));
+  for (const [index, line] of lines.entries()) {
     assert.deepEqual(
-      addressesIn(withAtSign(line)).map(({ address }) => address),
-      [found[index]],
+      addressesIn(line).map(({ address }) => address),
+      found[index],
       line,
     );
   }
-  assertEachFound(
-    CORPUS.findings.map(({ line }) => withAtSign(line)),
-    found,
-  );
+  assertEachFound(lines, found);
 });
 
 test("no corpus clean line holds an address", () => {
@@ -106,9 +103,16 @@ test("no corpus clean line holds an address", () => {
   assert.equal(run.status, 0, run.stderr);
 });
 
-test("every corpus allowed line holds an address that is found and allowed", () => {
+test("every corpus allowed line holds an address that is found, then allowed", () => {
   const lines = CORPUS.allowed.map(withAtSign);
-  for (const line of lines) assert.equal(addressesIn(line).length, 1, line);
+  for (const line of lines) {
+    assert.deepEqual(
+      addressesIn(line).map(({ address }) => address),
+      [line],
+      line,
+    );
+    assert.ok(isAllowed(line, "AUTHORS.md"), line);
+  }
   const run = runCheck(makeRepo({ "AUTHORS.md": lines.join("\n") }));
   assert.equal(run.status, 0, run.stderr);
 });
@@ -173,6 +177,15 @@ test("a repository entry allows its address only in its own file", () => {
   assert.deepEqual(findingsIn("test/fixture.mjs", FOREIGN, entries), []);
   assert.deepEqual(findingsIn("scripts/check-addresses.mjs", FOREIGN, entries), [], "the script that lists it");
   assert.deepEqual(findingsIn("README.md", FOREIGN, entries), [`README.md:1: ${FOREIGN}`]);
+});
+
+test("a repository entry matches its address in any case, as an allowed address and as a held one", () => {
+  const entries = [{ file: "test/fixture.mjs", address: FOREIGN }];
+  assert.deepEqual(findingsIn("test/fixture.mjs", FOREIGN.toUpperCase(), entries), []);
+  assert.deepEqual(
+    staleEntries(entries, () => `see ${FOREIGN.toUpperCase()}`),
+    [],
+  );
 });
 
 test("a repository entry whose file no longer holds its address is reported", () => {
