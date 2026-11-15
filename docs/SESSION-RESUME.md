@@ -8,7 +8,7 @@
 - [x] Code complete: 5 tools, TypeScript strict, 0 build errors
 - [x] Repo: https://github.com/qmediat/cursor-mcp (public, MIT)
 - [x] Pushed to GitHub (initial commit on main)
-- [x] cursor-agent authenticated: `service@qmt-mail.com` (Cursor Pro)
+- [x] cursor-agent authenticated (Cursor Pro)
 - [x] Configured in `~/.claude.json` as `cursor-cli`
 - [x] Backup: `~/.claude.json.backup-cursor-20260413`
 - [x] docs/SERVERS.md updated (server #21)
