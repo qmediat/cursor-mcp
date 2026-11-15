@@ -9,6 +9,7 @@ git clone https://github.com/qmediat/cursor-mcp.git
 cd cursor-mcp
 npm install
 npm run build
+npm test       # builds, then runs the node:test suites in test/ (smoke, argv, stream, cancellation, Supports check)
 ```
 
 The project compiles with TypeScript 7 (the native compiler). Its npm package ships only `tsc` — no `tsserver` —
@@ -83,6 +84,11 @@ src/
   disable directive, no bare `assert.throws(fn)`, no test without an assertion), repeated blocks and the baseline
   ratchet — `docs/SYSTEMIC.md` §1, with the files new code follows
 - `npm run format` before a commit (Prettier; `npm run lint` checks it)
+
+## Releases
+
+- A release updates the README heading `## Supports · version X.Y.Z` to the new version: `npm run check:supports`
+  (part of `npm run lint`, and a step of the release workflow before anything is published) fails when it differs.
 
 ## License
 
