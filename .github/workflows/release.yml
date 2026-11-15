@@ -76,7 +76,12 @@ jobs:
           fi
 
       - name: README "Supports" must name this version
-        run: node scripts/check-supports.mjs
+        run: |
+          if [ -f scripts/check-supports.mjs ]; then
+            node scripts/check-supports.mjs
+          else
+            echo "::warning::this tag predates the README Supports check"
+          fi
       - run: npm ci
       - run: npm run typecheck
       - run: npm test

@@ -31,3 +31,9 @@ test("a README without the Supports heading fails, naming the package version", 
   assert.equal(status, 1);
   assert.match(stderr, /no "## Supports · version X\.Y\.Z" heading; package\.json is 1\.2\.3/);
 });
+
+test("a directory without README.md fails with one line, not a stack trace", () => {
+  const { status, stderr } = runCheck("absent");
+  assert.equal(status, 1);
+  assert.match(stderr, /^check-supports: README\.md or package\.json in .* cannot be read: .*\n$/);
+});
