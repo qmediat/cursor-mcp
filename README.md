@@ -40,7 +40,7 @@ Use cursor_agent to add input validation to src/form.ts
 |---|---|
 | Works in | Claude Code · Claude Desktop |
 | Model families | Composer · Claude · GPT · Gemini · Grok |
-| Runs on | macOS · Linux · Windows |
+| Runs on | macOS · Linux |
 
 ## Docs
 
