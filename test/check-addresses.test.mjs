@@ -1,10 +1,11 @@
 // The address check (scripts/check-addresses.mjs) run as `npm run check:addresses` runs it: in a git repository whose
 // tracked text files hold only qmediat.io addresses and the allowed ones it exits 0; any other address exits 1 with one
 // `path:line: address` line; a directory git cannot list or a tracked file that cannot be read exits 2. Each case is a
-// throwaway repository; every foreign address is built at run time by `addressOf`, so that this file holds none.
+// throwaway repository. The shared corpus (test/fixtures/address-corpus.json) holds the pattern's cases; every other
+// test address is built at run time by `addressOf`, so that this file holds none.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
@@ -14,12 +15,19 @@ import { addressesIn, findingsIn, staleEntries } from "../scripts/check-addresse
 
 const SCRIPT = fileURLToPath(new URL("../scripts/check-addresses.mjs", import.meta.url));
 /**
- * An address built at run time, so that this file holds none for the repository's own check to find.
+ * Every test address is built here at run time, so that this file holds none for the repository's own check to find.
  * @param {string} local
  * @param {string} domain
  */
 const addressOf = (local, domain) => `${local}${"@"}${domain}`;
 const FOREIGN = addressOf("someone", "elsewhere.test");
+/**
+ * The corpus every implementation of the check shares; `(at)` stands for the at-sign, so the file holds no address.
+ * @type {{ findings: { line: string, address: string }[], clean: string[], allowed: string[] }}
+ */
+const CORPUS = JSON.parse(readFileSync(new URL("./fixtures/address-corpus.json", import.meta.url), "utf8"));
+/** @param {string} text */
+const withAtSign = (text) => text.replaceAll("(at)", "@");
 const ENV = { ...process.env, GIT_CEILING_DIRECTORIES: tmpdir() };
 /** @type {string[]} */
 const made = [];
@@ -65,25 +73,6 @@ test("an address in another domain fails with its path and line", () => {
   assert.equal(run.stderr, `NOTES.md:3: ${FOREIGN}\n`);
 });
 
-test("an address whose local part has letters outside ASCII fails too", () => {
-  const accented = addressOf("Zoë.Łukasz", "elsewhere.test");
-  const run = runCheck(makeRepo({ "NOTES.md": `write to ${accented}\n` }));
-  assert.equal(run.status, 1);
-  assert.equal(run.stderr, `NOTES.md:1: ${accented}\n`);
-});
-
-test("qmediat.io and the allowed addresses pass", () => {
-  const text = [
-    "dev@qmediat.io",
-    "Security@QMediat.io",
-    "12345+someone@users.noreply.github.com",
-    "Co-Authored-By: Claude <noreply@anthropic.com>",
-    "jane@example.com, joe@example.org, ann@example.net",
-  ].join("\n");
-  const run = runCheck(makeRepo({ "AUTHORS.md": text }));
-  assert.equal(run.status, 0, run.stderr);
-});
-
 /**
  * Runs the check on one file of `lines` and asserts that line N reports `found[N]`, and nothing else is reported.
  * @param {string[]} lines
@@ -95,49 +84,33 @@ function assertEachFound(lines, found) {
   assert.equal(run.stderr, found.map((address, index) => `NOTES.md:${index + 1}: ${address}\n`).join(""));
 }
 
-test("an npm scope, a version pin, an image file name and a git remote are not addresses", () => {
-  const text = [
-    'npx @qmediat.io/cursor-mcp@1.2.3 "@modelcontextprotocol/sdk@1.29.x"',
-    "zod@3.x sdk@1.29.x pkg@1.x.x pkg@1.2.x.x name@1.0.0-alpha.beta",
-    "![logo](logo@2x.png) ![icon](icon@3x.webp)",
-    "git@github.com:owner/repo.git Git@github.com:o/r",
-    "https://git@github.com/o/r ssh://git@github.com/o/r.git git+ssh://git@github.com/o/r.git",
-  ].join("\n");
-  assert.deepEqual(addressesIn(text), []);
-  const run = runCheck(makeRepo({ "README.md": text }));
+test("every corpus finding is reported as exactly its address, with its path and line", () => {
+  const found = CORPUS.findings.map(({ address }) => withAtSign(address));
+  for (const [index, { line }] of CORPUS.findings.entries()) {
+    assert.deepEqual(
+      addressesIn(withAtSign(line)).map(({ address }) => address),
+      [found[index]],
+      line,
+    );
+  }
+  assertEachFound(
+    CORPUS.findings.map(({ line }) => withAtSign(line)),
+    found,
+  );
+});
+
+test("no corpus clean line holds an address", () => {
+  const lines = CORPUS.clean.map(withAtSign);
+  for (const line of lines) assert.deepEqual(addressesIn(line), [], line);
+  const run = runCheck(makeRepo({ "NOTES.md": lines.join("\n") }));
   assert.equal(run.status, 0, run.stderr);
 });
 
-test("an address followed by a path, a port or a colon is still an address", () => {
-  const alice = addressOf("alice", "gmail.com");
-  const someone = addressOf("someone", "foreign.invalid");
-  const lines = [`https://${alice}/profile`, `see ${alice}/x`, `Contact ${someone}: details`, `${someone}:8080`];
-  assertEachFound(lines, [alice, alice, someone, someone]);
-});
-
-test("only git, in scp form with a path or after a URL scheme, is a remote; any other git@ or local part is an address", () => {
-  const git = addressOf("git", "github.com");
-  const alice = addressOf("alice", "github.com");
-  const dotted = addressOf("x.git", "github.com");
-  const lines = [`${git}:8080`, `${git}:`, `${git}/qmediat/x.git`, `ssh://${alice}/o/r`, `${dotted}:owner/repo`];
-  assertEachFound(lines, [git, git, git, alice, dotted]);
-});
-
-test("a host whose first label is a pixel scale is an address, not an image", () => {
-  const found = [addressOf("bob", "2x.com"), addressOf("sales", "2x.io"), addressOf("info", "10x.media")];
-  assertEachFound(found, found);
-});
-
-test("a host that only starts like a version is an address, not a version pin", () => {
-  const found = [
-    addressOf("bob", "1-pass.com"),
-    addressOf("me", "123-reg.co.uk"),
-    addressOf("info", "2-for-1.com"),
-    addressOf("admin", "1-2.example.com"),
-    addressOf("alice", "1.2.gmail.com"),
-    addressOf("someone", "1.263.com"),
-  ];
-  assertEachFound(found, found);
+test("every corpus allowed line holds an address that is found and allowed", () => {
+  const lines = CORPUS.allowed.map(withAtSign);
+  for (const line of lines) assert.equal(addressesIn(line).length, 1, line);
+  const run = runCheck(makeRepo({ "AUTHORS.md": lines.join("\n") }));
+  assert.equal(run.status, 0, run.stderr);
 });
 
 test("a binary file and package-lock.json are not read", () => {
